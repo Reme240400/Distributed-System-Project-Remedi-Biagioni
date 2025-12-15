@@ -1,0 +1,7 @@
+# Coordinator
+fastapi
+uvicorn[standard]
+pydantic
+
+# Miner
+requests
