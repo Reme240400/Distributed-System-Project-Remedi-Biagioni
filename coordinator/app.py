@@ -5,7 +5,7 @@ from .chain import Chain
 app = FastAPI(title="Distributed Mining Monitor - Coordinator", version="0.1.0")
 
 # Global in-memory chain (MVP)
-chain = Chain(difficulty_bits=20)  # tweak later for speed; 18-22 usually OK on CPU
+chain = Chain(difficulty_bits=15)  # tweak later for speed; 18-22 usually OK on CPU
 
 
 @app.get("/template", response_model=BlockTemplate)
