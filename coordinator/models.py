@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 
 class BlockTemplate(BaseModel):
@@ -50,12 +50,17 @@ class BlockAccepted(BaseModel):
 
 class Metrics(BaseModel):
     """
-    Minimal runtime metrics exposed by the coordinator.
+    Runtime metrics exposed by the coordinator.
     """
     height: int
     blocks_accepted: int
     avg_block_time_ms: float
     last_block_time_ms: Optional[int] = None
+
+    accepted_by_miner: Dict[str, int]
+    rejected_total: int
+    rejected_by_reason: Dict[str, int]
+    uptime_ms: int
 
 class ChainBlock(BaseModel):
     """

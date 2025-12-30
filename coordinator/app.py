@@ -68,14 +68,19 @@ def submit_block(sub: BlockSubmission) -> BlockAccepted:
 @app.get("/metrics", response_model=Metrics)
 def get_metrics() -> Metrics:
     """
-    Expose basic metrics for monitoring and experiments.
+    Expose runtime metrics for experiments and monitoring.
     """
     return Metrics(
         height=chain.height(),
         blocks_accepted=len(chain.blocks) - 1,  # exclude genesis
         avg_block_time_ms=chain.avg_block_time_ms(),
         last_block_time_ms=chain.last_block_time_ms(),
+        accepted_by_miner=chain.accepted_by_miner,
+        rejected_total=chain.rejected_total,
+        rejected_by_reason=chain.rejected_by_reason,
+        uptime_ms=chain.uptime_ms(),
     )
+
 
 @app.get("/chain", response_model=ChainView)
 def get_chain(limit: int = 20) -> ChainView:

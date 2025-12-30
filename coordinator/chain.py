@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import time
-
 from .pow import header_bytes, sha256_hex, has_leading_zero_bits
 
 
@@ -36,6 +35,12 @@ class Chain:
         self.difficulty_bits = difficulty_bits
         self.blocks: List[Block] = []
         self._genesis()
+        # Metrics / counters
+        self.accepted_by_miner = {}
+        self.rejected_total = 0
+        self.rejected_by_reason = {}
+        self.start_time_ms = int(time.time() * 1000)
+
 
     def _genesis(self) -> None:
         """
@@ -95,29 +100,25 @@ class Chain:
         miner_id: str,
         mined_ts: int
     ) -> Tuple[bool, str, Optional[Block]]:
-        """
-        Validate a proposed block and append it to the chain if valid.
 
-        MVP rules:
-        - the block MUST extend the current tip (single-chain only, no forks)
-        - the PoW hash MUST satisfy the current difficulty
-        """
-
-        # Enforce "single-chain" rule: proposals must extend the current tip.
         tip = self.tip()
 
         if height != tip.height + 1:
-            return False, f"wrong height: expected {tip.height + 1}, got {height}", None
+            reason = f"wrong height: expected {tip.height + 1}, got {height}"
+            self._count_reject(reason)
+            return False, reason, None
 
         if prev_hash != tip.block_hash:
-            return False, "prev_hash does not match current tip (forks not supported in MVP)", None
+            reason = "prev_hash does not match current tip"
+            self._count_reject(reason)
+            return False, reason, None
 
-        # Recompute block hash and verify Proof-of-Work.
         bh = sha256_hex(header_bytes(height, prev_hash, nonce))
         if not has_leading_zero_bits(bh, self.difficulty_bits):
-            return False, "invalid PoW for current difficulty", None
+            reason = "invalid PoW for current difficulty"
+            self._count_reject(reason)
+            return False, reason, None
 
-        # Accept the block and append it to the in-memory chain.
         now = int(time.time() * 1000)
         block = Block(
             height=height,
@@ -128,6 +129,33 @@ class Chain:
             accepted_timestamp_ms=now,
             block_hash=bh,
         )
+
         self.blocks.append(block)
 
+        # Count accepted block
+        self.accepted_by_miner[miner_id] = self.accepted_by_miner.get(miner_id, 0) + 1
+
         return True, "accepted", block
+
+
+    def get_last_blocks(self, limit: int = 20) -> List[Block]:
+        """
+        Return the last `limit` blocks from the chain (including genesis if in range).
+        Useful for debugging, dashboards, and demos.
+        """
+        if limit <= 0:
+            return []
+        return self.blocks[-limit:]
+
+    def _count_reject(self, reason: str) -> None:
+        """
+        Update reject counters for observability.
+        """
+        self.rejected_total += 1
+        self.rejected_by_reason[reason] = self.rejected_by_reason.get(reason, 0) + 1
+
+    def uptime_ms(self) -> int:
+        """
+        Coordinator uptime in milliseconds.
+        """
+        return int(time.time() * 1000) - self.start_time_ms
