@@ -1,6 +1,10 @@
 from fastapi import FastAPI, HTTPException
-from .models import BlockTemplate, BlockSubmission, BlockAccepted, Metrics
+from .models import BlockTemplate, BlockSubmission, BlockAccepted, Metrics, ChainView, ChainBlock
 from .chain import Chain
+import logging
+
+logger = logging.getLogger("coordinator")
+logger.setLevel(logging.INFO)
 
 # FastAPI app exposing coordinator endpoints used by miners and the dashboard.
 app = FastAPI(title="Distributed Mining Monitor - Coordinator", version="0.1.0")
@@ -30,6 +34,7 @@ def get_template() -> BlockTemplate:
 def submit_block(sub: BlockSubmission) -> BlockAccepted:
     """
     Validate a miner block proposal and append it to the chain if valid.
+    Logs both accepted and rejected submissions for observability.
     """
     ok, reason, block = chain.validate_and_add(
         height=sub.height,
@@ -40,9 +45,16 @@ def submit_block(sub: BlockSubmission) -> BlockAccepted:
     )
 
     if not ok:
-        # Rejections usually happen because another miner was faster (stale height),
-        # or because the PoW does not match the current difficulty.
+        logger.info(
+            "REJECT miner=%s height=%s reason=%s",
+            sub.miner_id, sub.height, reason
+        )
         return BlockAccepted(accepted=False, reason=reason)
+
+    logger.info(
+        "ACCEPT miner=%s height=%s hash=%s",
+        sub.miner_id, block.height, block.block_hash[:16]
+    )
 
     return BlockAccepted(
         accepted=True,
@@ -50,6 +62,7 @@ def submit_block(sub: BlockSubmission) -> BlockAccepted:
         block_hash=block.block_hash if block else None,
         height=block.height if block else None,
     )
+
 
 
 @app.get("/metrics", response_model=Metrics)
@@ -62,4 +75,30 @@ def get_metrics() -> Metrics:
         blocks_accepted=len(chain.blocks) - 1,  # exclude genesis
         avg_block_time_ms=chain.avg_block_time_ms(),
         last_block_time_ms=chain.last_block_time_ms(),
+    )
+
+@app.get("/chain", response_model=ChainView)
+def get_chain(limit: int = 20) -> ChainView:
+    """
+    Return a snapshot of the last N blocks.
+    This endpoint is meant for humans (inspection) and for dashboards.
+    """
+    blocks = chain.get_last_blocks(limit=limit)
+    view_blocks = [
+        ChainBlock(
+            height=b.height,
+            prev_hash=b.prev_hash,
+            nonce=b.nonce,
+            miner_id=b.miner_id,
+            mined_timestamp_ms=b.mined_timestamp_ms,
+            accepted_timestamp_ms=b.accepted_timestamp_ms,
+            block_hash=b.block_hash,
+        )
+        for b in blocks
+    ]
+
+    return ChainView(
+        tip_height=chain.height(),
+        difficulty_bits=chain.difficulty_bits,
+        blocks=view_blocks,
     )
