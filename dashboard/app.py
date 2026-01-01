@@ -21,6 +21,14 @@ CHAIN_LIMIT = int(os.getenv("CHAIN_LIMIT", "50"))
 # Refresh interval in milliseconds (Dash will call callbacks periodically).
 REFRESH_MS = int(os.getenv("REFRESH_MS", "1000"))
 
+# ---------------------------
+# In-memory time series buffer (dashboard-side)
+# ---------------------------
+# We keep a small history of rejected_total to compute a reject rate over time.
+REJECT_SERIES_MAX_POINTS = int(os.getenv("REJECT_SERIES_MAX_POINTS", "300"))
+_reject_series: List[Tuple[float, int]] = []  # (timestamp_s, rejected_total)
+
+
 def _card_style() -> Dict[str, Any]:
     """
     Simple card styling for summary metrics.
@@ -99,6 +107,21 @@ def compute_block_times(chain_blocks: List[Dict[str, Any]]) -> List[Tuple[int, i
 
     return out
 
+def normalize_reject_reason(reason: str) -> str:
+    """
+    Map verbose reject reasons to compact categories for plotting/reporting.
+    """
+    if not reason:
+        return "other"
+    r = reason.lower()
+    if "wrong height" in r:
+        return "wrong_height"
+    if "prev_hash" in r:
+        return "prev_hash_mismatch"
+    if "invalid pow" in r:
+        return "invalid_pow"
+    return "other"
+
 
 # ---------------------------
 # Dash app
@@ -153,6 +176,35 @@ app.layout = html.Div(
                 ),
             ],
         ),
+        
+                # Charts row (2)
+        html.Div(
+            style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginTop": "12px"},
+            children=[
+                html.Div(
+                    style={"flex": "1 1 580px", "minWidth": "360px"},
+                    children=[
+                        html.H4("Rejected submissions by reason", style={"marginBottom": "4px"}),
+                        dcc.Graph(
+                            id="graph-rejected-by-reason",
+                            config={"displayModeBar": False},
+                            style={"height": "360px"},
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={"flex": "1 1 580px", "minWidth": "360px"},
+                    children=[
+                        html.H4("Reject rate over time", style={"marginBottom": "4px"}),
+                        dcc.Graph(
+                            id="graph-reject-rate",
+                            config={"displayModeBar": False},
+                            style={"height": "360px"},
+                        ),
+                    ],
+                ),
+            ],
+        ),
 
         html.H4("Last blocks", style={"marginTop": "16px", "marginBottom": "6px"}),
 
@@ -196,6 +248,8 @@ app.layout = html.Div(
     Output("card-uptime", "children"),
     Output("graph-block-time", "figure"),
     Output("graph-accepted-by-miner", "figure"),
+    Output("graph-rejected-by-reason", "figure"),
+    Output("graph-reject-rate", "figure"),
     Output("table-blocks", "data"),
     Output("status-line", "children"),
     Input("tick", "n_intervals"),
@@ -208,16 +262,20 @@ def refresh(_n: int):
     chain_view = fetch_chain(CHAIN_LIMIT)
 
     if not metrics or not chain_view or "blocks" not in chain_view:
-        return (
+            return (
             make_card("Chain height", "—", "Coordinator not reachable"),
             make_card("Blocks accepted", "—"),
             make_card("Rejected total", "—"),
             make_card("Uptime", "—"),
             go.Figure(),
             go.Figure(),
+            go.Figure(),  # rejected-by-reason
+            go.Figure(),  # reject-rate
             [],
             f"Waiting for coordinator at {COORDINATOR_URL} ...",
         )
+
+
 
     # --- Summary cards ---
     height = metrics.get("height", 0)
@@ -245,6 +303,65 @@ def refresh(_n: int):
         margin=dict(l=30, r=10, t=10, b=30),
         xaxis_title="Block height",
         yaxis_title="Δ accepted_timestamp (ms)",
+    )
+
+        # --- Rejected by reason (bar chart) ---
+    rejected_by_reason = metrics.get("rejected_by_reason", {})
+    # Aggregate verbose reject reasons into compact categories (buckets)
+    buckets: Dict[str, int] = {}
+    for reason, cnt in rejected_by_reason.items():
+        k = normalize_reject_reason(reason)
+        buckets[k] = buckets.get(k, 0) + int(cnt)
+
+    reasons = list(buckets.keys())
+    reason_counts = [buckets[r] for r in reasons]
+
+    
+    
+    fig_rejected_reason = go.Figure()
+    if reasons:
+        fig_rejected_reason.add_trace(go.Bar(x=reasons, y=reason_counts, name="rejected"))
+    fig_rejected_reason.update_layout(
+        height=360,
+        autosize=False,
+        margin=dict(l=30, r=10, t=10, b=80),
+        xaxis_title="Reason",
+        yaxis_title="Count",
+    )
+    # Rotate x labels for readability
+    fig_rejected_reason.update_xaxes(tickangle=20)
+
+    # --- Reject rate over time (line chart) ---
+    # Store (timestamp, rejected_total) points and compute per-interval rate.
+    now_s = time.time()
+    global _reject_series
+    _reject_series.append((now_s, int(rejected_total)))
+
+    # Keep a bounded history to avoid memory growth.
+    if len(_reject_series) > REJECT_SERIES_MAX_POINTS:
+        _reject_series = _reject_series[-REJECT_SERIES_MAX_POINTS:]
+
+    # Compute rate as delta_rejects / delta_time between consecutive points.
+    rate_x = []
+    rate_y = []
+    if len(_reject_series) >= 2:
+        for i in range(1, len(_reject_series)):
+            t0, r0 = _reject_series[i - 1]
+            t1, r1 = _reject_series[i]
+            dt = max(t1 - t0, 1e-6)
+            dr = r1 - r0
+            rate_x.append(t1)
+            rate_y.append(dr / dt)  # rejects per second
+
+    fig_reject_rate = go.Figure()
+    if rate_x:
+        fig_reject_rate.add_trace(go.Scatter(x=rate_x, y=rate_y, mode="lines+markers", name="reject/s"))
+    fig_reject_rate.update_layout(
+        height=360,
+        autosize=False,
+        margin=dict(l=30, r=10, t=10, b=30),
+        xaxis_title="Time (s since epoch)",
+        yaxis_title="Rejects / second",
     )
 
     # --- Accepted by miner bar chart ---
@@ -289,9 +406,12 @@ def refresh(_n: int):
         card_uptime,
         fig_block_time,
         fig_accepted,
+        fig_rejected_reason,
+        fig_reject_rate,
         table_data,
         status,
     )
+
 
 
 if __name__ == "__main__":
