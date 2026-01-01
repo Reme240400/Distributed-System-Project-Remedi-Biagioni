@@ -28,6 +28,10 @@ REFRESH_MS = int(os.getenv("REFRESH_MS", "1000"))
 REJECT_SERIES_MAX_POINTS = int(os.getenv("REJECT_SERIES_MAX_POINTS", "300"))
 _reject_series: List[Tuple[float, int]] = []  # (timestamp_s, rejected_total)
 
+# Dashboard start time (used to show "seconds since start" on the X axis).
+DASH_START_S = time.time()
+
+
 
 def _card_style() -> Dict[str, Any]:
     """
@@ -335,7 +339,8 @@ def refresh(_n: int):
     # Store (timestamp, rejected_total) points and compute per-interval rate.
     now_s = time.time()
     global _reject_series
-    _reject_series.append((now_s, int(rejected_total)))
+    t_rel = now_s - DASH_START_S  # seconds since dashboard start
+    _reject_series.append((t_rel, rejected_total))
 
     # Keep a bounded history to avoid memory growth.
     if len(_reject_series) > REJECT_SERIES_MAX_POINTS:
@@ -360,7 +365,7 @@ def refresh(_n: int):
         height=360,
         autosize=False,
         margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Time (s since epoch)",
+        xaxis_title="Time (s since dashboard start)",
         yaxis_title="Rejects / second",
     )
 
