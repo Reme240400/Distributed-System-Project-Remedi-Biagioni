@@ -3,5 +3,9 @@ fastapi
 uvicorn[standard]
 pydantic
 
+#Dashboard
+dash
+plotly
+
 # Miner
 requests
