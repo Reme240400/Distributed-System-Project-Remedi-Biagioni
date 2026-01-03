@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException
 from .models import BlockTemplate, BlockSubmission, BlockAccepted, Metrics, ChainView, ChainBlock
 from .chain import Chain
 import logging
+import os
+
 
 logger = logging.getLogger("coordinator")
 logger.setLevel(logging.INFO)
@@ -11,7 +13,8 @@ app = FastAPI(title="Distributed Mining Monitor - Coordinator", version="0.1.0")
 
 # Global in-memory chain for the MVP.
 # Note: This makes the coordinator the single source of truth for the chain state.
-chain = Chain(difficulty_bits=18)  # tune for demo speed (e.g., 15–20 on CPU)
+DIFFICULTY_BITS = int(os.getenv("DIFFICULTY_BITS", "18"))
+chain = Chain(difficulty_bits=DIFFICULTY_BITS)
 
 
 @app.get("/template", response_model=BlockTemplate)
