@@ -39,7 +39,7 @@ Start-Sleep -Seconds 1
 for ($i = 1; $i -le $Miners; $i++) {
   $minerId = "cpu-$i"
   $minerCmd = @"
-python miner/miner.py --coordinator $CoordinatorUrl --miner-id $minerId
+python -m miner.miner --coordinator $CoordinatorUrl --miner-id $minerId
 "@
   Start-Process powershell -ArgumentList "-NoExit", "-Command", $minerCmd | Out-Null
   Start-Sleep -Milliseconds 200
