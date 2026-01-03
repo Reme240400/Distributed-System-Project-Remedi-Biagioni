@@ -31,6 +31,9 @@ _reject_series: List[Tuple[float, int]] = []  # (timestamp_s, rejected_total)
 # Dashboard start time (used to show "seconds since start" on the X axis).
 DASH_START_S = time.time()
 
+# Track accepted_total as well (needed for reject ratio over time).
+ACCEPT_SERIES_MAX_POINTS = int(os.getenv("ACCEPT_SERIES_MAX_POINTS", "300"))
+_accept_series: List[Tuple[float, int]] = []  # (t_rel_s, blocks_accepted)
 
 
 def _card_style() -> Dict[str, Any]:
@@ -156,6 +159,7 @@ app.layout = html.Div(
                 html.Div(id="card-height", style=_card_style()),
                 html.Div(id="card-accepted", style=_card_style()),
                 html.Div(id="card-rejected", style=_card_style()),
+                html.Div(id="card-reject-ratio", style=_card_style()),
                 html.Div(id="card-uptime", style=_card_style()),
             ],
         ),
@@ -181,7 +185,7 @@ app.layout = html.Div(
             ],
         ),
         
-                # Charts row (2)
+        # Charts row (2)
         html.Div(
             style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginTop": "12px"},
             children=[
@@ -209,6 +213,20 @@ app.layout = html.Div(
                 ),
             ],
         ),
+        
+        # Charts row (3)
+        html.Div(
+            style={"marginTop": "12px"},
+            children=[
+                html.H4("Reject ratio over time", style={"marginBottom": "4px"}),
+                dcc.Graph(
+                    id="graph-reject-ratio",
+                    config={"displayModeBar": False},
+                    style={"height": "360px"},
+                ),
+            ],
+        ),
+
 
         html.H4("Last blocks", style={"marginTop": "16px", "marginBottom": "6px"}),
 
@@ -249,15 +267,18 @@ app.layout = html.Div(
     Output("card-height", "children"),
     Output("card-accepted", "children"),
     Output("card-rejected", "children"),
+    Output("card-reject-ratio", "children"),
     Output("card-uptime", "children"),
     Output("graph-block-time", "figure"),
     Output("graph-accepted-by-miner", "figure"),
     Output("graph-rejected-by-reason", "figure"),
     Output("graph-reject-rate", "figure"),
+    Output("graph-reject-ratio", "figure"),
     Output("table-blocks", "data"),
     Output("status-line", "children"),
     Input("tick", "n_intervals"),
 )
+
 def refresh(_n: int):
     """
     Periodically refresh dashboard by pulling data from the coordinator endpoints.
@@ -265,53 +286,89 @@ def refresh(_n: int):
     metrics = fetch_metrics()
     chain_view = fetch_chain(CHAIN_LIMIT)
 
+    # If coordinator is unreachable, return placeholders (must match Output order).
     if not metrics or not chain_view or "blocks" not in chain_view:
-            return (
+        empty = go.Figure()
+        empty.update_layout(height=360, autosize=False, margin=dict(l=30, r=10, t=10, b=30))
+
+        return (
             make_card("Chain height", "—", "Coordinator not reachable"),
             make_card("Blocks accepted", "—"),
             make_card("Rejected total", "—"),
+            make_card("Reject ratio", "—"),
             make_card("Uptime", "—"),
-            go.Figure(),
-            go.Figure(),
-            go.Figure(),  # rejected-by-reason
-            go.Figure(),  # reject-rate
-            [],
+            empty,  # block time
+            empty,  # accepted by miner
+            empty,  # rejected by reason
+            empty,  # reject rate
+            empty,  # reject ratio
+            [],     # table
             f"Waiting for coordinator at {COORDINATOR_URL} ...",
         )
 
-
-
-    # --- Summary cards ---
-    height = metrics.get("height", 0)
-    blocks_accepted = metrics.get("blocks_accepted", 0)
-    rejected_total = metrics.get("rejected_total", 0)
-    uptime_ms = metrics.get("uptime_ms", 0)
+    # ---------------------------
+    # Read metrics (convert counters to int for safe arithmetic)
+    # ---------------------------
+    height = int(metrics.get("height", 0))
+    blocks_accepted = int(metrics.get("blocks_accepted", 0))
+    rejected_total = int(metrics.get("rejected_total", 0))
+    uptime_ms = int(metrics.get("uptime_ms", 0))
 
     card_height = make_card("Chain height", str(height), "Tip height")
     card_accepted = make_card("Blocks accepted", str(blocks_accepted), "Excluding genesis")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
 
-    # --- Block time chart ---
-    blocks = chain_view["blocks"]
-    bt = compute_block_times(blocks)  # list of (height, delta_ms)
+    # ---------------------------
+    # Update dashboard-side time series (single append per tick)
+    # ---------------------------
+    t_rel = time.time() - DASH_START_S  # seconds since dashboard start
 
+    global _reject_series, _accept_series
+    _reject_series.append((t_rel, rejected_total))
+    _accept_series.append((t_rel, blocks_accepted))
+
+    # Keep bounded history
+    if len(_reject_series) > REJECT_SERIES_MAX_POINTS:
+        _reject_series = _reject_series[-REJECT_SERIES_MAX_POINTS:]
+    if len(_accept_series) > ACCEPT_SERIES_MAX_POINTS:
+        _accept_series = _accept_series[-ACCEPT_SERIES_MAX_POINTS:]
+
+    # ---------------------------
+    # Chain blocks and derived values
+    # ---------------------------
+    blocks = chain_view["blocks"]
+
+    # --- Block time chart ---
+    bt = compute_block_times(blocks)  # list of (height, delta_ms)
     fig_block_time = go.Figure()
     if bt:
         x = [h for (h, _dt) in bt]
         y = [_dt for (_h, _dt) in bt]
         fig_block_time.add_trace(go.Scatter(x=x, y=y, mode="lines+markers", name="block_time_ms"))
     fig_block_time.update_layout(
-        height=360,
-        autosize=False,
+        height=360, autosize=False,
         margin=dict(l=30, r=10, t=10, b=30),
         xaxis_title="Block height",
         yaxis_title="Δ accepted_timestamp (ms)",
     )
 
-        # --- Rejected by reason (bar chart) ---
-    rejected_by_reason = metrics.get("rejected_by_reason", {})
-    # Aggregate verbose reject reasons into compact categories (buckets)
+    # --- Accepted by miner bar chart ---
+    accepted_by_miner = metrics.get("accepted_by_miner", {}) or {}
+    miners = list(accepted_by_miner.keys())
+    counts = [int(accepted_by_miner[m]) for m in miners]
+
+    fig_accepted = go.Figure()
+    fig_accepted.add_trace(go.Bar(x=miners, y=counts, name="accepted"))
+    fig_accepted.update_layout(
+        height=360, autosize=False,
+        margin=dict(l=30, r=10, t=10, b=30),
+        xaxis_title="Miner",
+        yaxis_title="Accepted blocks",
+    )
+
+    # --- Rejected by reason (bucketed) ---
+    rejected_by_reason = metrics.get("rejected_by_reason", {}) or {}
     buckets: Dict[str, int] = {}
     for reason, cnt in rejected_by_reason.items():
         k = normalize_reject_reason(reason)
@@ -320,35 +377,20 @@ def refresh(_n: int):
     reasons = list(buckets.keys())
     reason_counts = [buckets[r] for r in reasons]
 
-    
-    
     fig_rejected_reason = go.Figure()
     if reasons:
         fig_rejected_reason.add_trace(go.Bar(x=reasons, y=reason_counts, name="rejected"))
     fig_rejected_reason.update_layout(
-        height=360,
-        autosize=False,
+        height=360, autosize=False,
         margin=dict(l=30, r=10, t=10, b=80),
-        xaxis_title="Reason",
+        xaxis_title="Reason (bucketed)",
         yaxis_title="Count",
     )
-    # Rotate x labels for readability
     fig_rejected_reason.update_xaxes(tickangle=20)
 
-    # --- Reject rate over time (line chart) ---
-    # Store (timestamp, rejected_total) points and compute per-interval rate.
-    now_s = time.time()
-    global _reject_series
-    t_rel = now_s - DASH_START_S  # seconds since dashboard start
-    _reject_series.append((t_rel, rejected_total))
-
-    # Keep a bounded history to avoid memory growth.
-    if len(_reject_series) > REJECT_SERIES_MAX_POINTS:
-        _reject_series = _reject_series[-REJECT_SERIES_MAX_POINTS:]
-
-    # Compute rate as delta_rejects / delta_time between consecutive points.
-    rate_x = []
-    rate_y = []
+    # --- Reject rate over time ---
+    rate_x: List[float] = []
+    rate_y: List[float] = []
     if len(_reject_series) >= 2:
         for i in range(1, len(_reject_series)):
             t0, r0 = _reject_series[i - 1]
@@ -362,32 +404,48 @@ def refresh(_n: int):
     if rate_x:
         fig_reject_rate.add_trace(go.Scatter(x=rate_x, y=rate_y, mode="lines+markers", name="reject/s"))
     fig_reject_rate.update_layout(
-        height=360,
-        autosize=False,
+        height=360, autosize=False,
         margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Time (s since dashboard start)",
+        xaxis_title="Time (seconds since dashboard start)",
         yaxis_title="Rejects / second",
     )
 
-    # --- Accepted by miner bar chart ---
-    accepted_by_miner = metrics.get("accepted_by_miner", {})
-    miners = list(accepted_by_miner.keys())
-    counts = [accepted_by_miner[m] for m in miners]
+    # --- Reject ratio over time ---
+    ratio_x: List[float] = []
+    ratio_y: List[float] = []
 
-    fig_accepted = go.Figure()
-    fig_accepted.add_trace(go.Bar(x=miners, y=counts, name="accepted"))
-    fig_accepted.update_layout(
-        height=360,
-        autosize=False,
+    n = min(len(_reject_series), len(_accept_series))
+    if n >= 2:
+        for i in range(1, n):
+            t0, r0 = _reject_series[i - 1]
+            t1, r1 = _reject_series[i]
+            _t0, a0 = _accept_series[i - 1]
+            _t1, a1 = _accept_series[i]
+
+            dr = r1 - r0
+            da = a1 - a0
+            denom = dr + da
+            ratio = (dr / denom) if denom > 0 else 0.0
+
+            ratio_x.append(t1)
+            ratio_y.append(ratio)
+
+    fig_reject_ratio = go.Figure()
+    if ratio_x:
+        fig_reject_ratio.add_trace(go.Scatter(x=ratio_x, y=ratio_y, mode="lines+markers", name="reject_ratio"))
+    fig_reject_ratio.update_layout(
+        height=360, autosize=False,
         margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Miner",
-        yaxis_title="Accepted blocks",
+        xaxis_title="Time (seconds since dashboard start)",
+        yaxis_title="Reject ratio (0..1)",
+        yaxis=dict(range=[0, 1]),
     )
 
-    # --- Blocks table (last blocks) ---
-    # Show latest first.
-    blocks_sorted = sorted(blocks, key=lambda b: b["height"], reverse=True)
+    current_ratio = ratio_y[-1] if ratio_y else 0.0
+    card_ratio = make_card("Reject ratio", f"{current_ratio:.2f}", "Δreject / (Δreject + Δaccept)")
 
+    # --- Blocks table (last blocks) ---
+    blocks_sorted = sorted(blocks, key=lambda b: b["height"], reverse=True)
     table_data = []
     for b in blocks_sorted[:15]:
         table_data.append({
@@ -399,8 +457,8 @@ def refresh(_n: int):
             "accepted_timestamp_ms": b["accepted_timestamp_ms"],
         })
 
-    # --- Status line with a useful one-liner ---
-    avg_bt = metrics.get("avg_block_time_ms", 0.0)
+    # --- Status line ---
+    avg_bt = float(metrics.get("avg_block_time_ms", 0.0))
     last_bt = metrics.get("last_block_time_ms", None)
     status = f"avg_block_time={avg_bt:.1f}ms | last_block_time={last_bt}ms | miners={len(miners)}"
 
@@ -408,14 +466,18 @@ def refresh(_n: int):
         card_height,
         card_accepted,
         card_rejected,
+        card_ratio,
         card_uptime,
         fig_block_time,
         fig_accepted,
         fig_rejected_reason,
         fig_reject_rate,
+        fig_reject_ratio,
         table_data,
         status,
     )
+
+
 
 
 
