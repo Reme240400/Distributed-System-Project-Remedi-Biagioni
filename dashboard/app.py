@@ -157,7 +157,6 @@ app.layout = html.Div(
             style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "12px"},
             children=[
                 html.Div(id="card-height", style=_card_style()),
-                # html.Div(id="card-accepted", style=_card_style()),
                 html.Div(id="card-rejected", style=_card_style()),
                 html.Div(id="card-reject-ratio", style=_card_style()),
                 html.Div(id="card-uptime", style=_card_style()),
@@ -187,29 +186,13 @@ app.layout = html.Div(
         
         # Charts row (2)
         html.Div(
-            style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginTop": "12px"},
+            style={"marginTop": "12px"},
             children=[
-                html.Div(
-                    style={"flex": "1 1 580px", "minWidth": "360px"},
-                    children=[
-                        html.H4("Rejected submissions by reason", style={"marginBottom": "4px"}),
-                        dcc.Graph(
-                            id="graph-rejected-by-reason",
-                            config={"displayModeBar": False},
-                            style={"height": "360px"},
-                        ),
-                    ],
-                ),
-                html.Div(
-                    style={"flex": "1 1 580px", "minWidth": "360px"},
-                    children=[
-                        html.H4("Reject rate over time", style={"marginBottom": "4px"}),
-                        dcc.Graph(
-                            id="graph-reject-rate",
-                            config={"displayModeBar": False},
-                            style={"height": "360px"},
-                        ),
-                    ],
+                html.H4("Reject rate over time", style={"marginBottom": "4px"}),
+                dcc.Graph(
+                    id="graph-reject-rate",
+                    config={"displayModeBar": False},
+                    style={"height": "360px"},
                 ),
             ],
         ),
@@ -265,13 +248,11 @@ app.layout = html.Div(
 
 @app.callback(
     Output("card-height", "children"),
-    # Output("card-accepted", "children"),
     Output("card-rejected", "children"),
     Output("card-reject-ratio", "children"),
     Output("card-uptime", "children"),
     Output("graph-block-time", "figure"),
     Output("graph-accepted-by-miner", "figure"),
-    Output("graph-rejected-by-reason", "figure"),
     Output("graph-reject-rate", "figure"),
     Output("graph-reject-ratio", "figure"),
     Output("table-blocks", "data"),
@@ -292,13 +273,11 @@ def refresh(_n: int):
 
         return (
             make_card("Chain height", "—", "Coordinator not reachable"),
-            # make_card("Blocks accepted", "—"),
             make_card("Rejected total", "—"),
             make_card("Reject ratio", "—"),
             make_card("Uptime", "—"),
             empty,  # block time
             empty,  # accepted by miner
-            empty,  # rejected by reason
             empty,  # reject rate
             empty,  # reject ratio
             [],     # table
@@ -314,7 +293,6 @@ def refresh(_n: int):
     uptime_ms = int(metrics.get("uptime_ms", 0))
 
     card_height = make_card("Chain height", str(height), "Tip height")
-    # card_accepted = make_card("Blocks accepted", str(blocks_accepted), "Excluding genesis")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
 
@@ -366,27 +344,6 @@ def refresh(_n: int):
         yaxis_title="Accepted blocks",
     )
 
-    # --- Rejected by reason (bucketed) ---
-    rejected_by_reason = metrics.get("rejected_by_reason", {}) or {}
-    buckets: Dict[str, int] = {}
-    for reason, cnt in rejected_by_reason.items():
-        k = normalize_reject_reason(reason)
-        buckets[k] = buckets.get(k, 0) + int(cnt)
-
-    reasons = list(buckets.keys())
-    reason_counts = [buckets[r] for r in reasons]
-
-    fig_rejected_reason = go.Figure()
-    if reasons:
-        fig_rejected_reason.add_trace(go.Bar(x=reasons, y=reason_counts, name="rejected"))
-    fig_rejected_reason.update_layout(
-        height=360, autosize=False,
-        margin=dict(l=30, r=10, t=10, b=80),
-        xaxis_title="Reason (bucketed)",
-        yaxis_title="Count",
-    )
-    fig_rejected_reason.update_xaxes(tickangle=20)
-
     # --- Reject rate over time ---
     rate_x: List[float] = []
     rate_y: List[float] = []
@@ -409,25 +366,18 @@ def refresh(_n: int):
         yaxis_title="Rejects / second",
     )
 
-    # --- Reject ratio over time ---
+    # --- Reject ratio over time (cumulative total) ---
     ratio_x: List[float] = []
     ratio_y: List[float] = []
 
     n = min(len(_reject_series), len(_accept_series))
-    if n >= 2:
-        for i in range(1, n):
-            t0, r0 = _reject_series[i - 1]
-            t1, r1 = _reject_series[i]
-            _t0, a0 = _accept_series[i - 1]
-            _t1, a1 = _accept_series[i]
-
-            dr = r1 - r0
-            da = a1 - a0
-            denom = dr + da
-            ratio = (dr / denom) if denom > 0 else 0.0
-
-            ratio_x.append(t1)
-            ratio_y.append(ratio)
+    for i in range(n):
+        t, r = _reject_series[i]
+        _, a = _accept_series[i]
+        denom = r + a
+        ratio = (r / denom) if denom > 0 else 0.0
+        ratio_x.append(t)
+        ratio_y.append(ratio)
 
     fig_reject_ratio = go.Figure()
     if ratio_x:
@@ -440,8 +390,10 @@ def refresh(_n: int):
         yaxis=dict(range=[0, 1]),
     )
 
-    current_ratio = ratio_y[-1] if ratio_y else 0.0
-    card_ratio = make_card("Reject ratio", f"{current_ratio:.2f}", "Δreject / (Δreject + Δaccept)")
+    # Compute total reject ratio for card
+    total_denom = rejected_total + blocks_accepted
+    total_ratio = (rejected_total / total_denom) if total_denom > 0 else 0.0
+    card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)")
 
     # --- Blocks table (last blocks) ---
     blocks_sorted = sorted(blocks, key=lambda b: b["height"], reverse=True)
@@ -463,13 +415,11 @@ def refresh(_n: int):
 
     return (
         card_height,
-        # card_accepted,
         card_rejected,
         card_ratio,
         card_uptime,
         fig_block_time,
         fig_accepted,
-        fig_rejected_reason,
         fig_reject_rate,
         fig_reject_ratio,
         table_data,
