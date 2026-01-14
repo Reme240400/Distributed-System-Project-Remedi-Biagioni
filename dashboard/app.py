@@ -157,7 +157,7 @@ app.layout = html.Div(
             style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "12px"},
             children=[
                 html.Div(id="card-height", style=_card_style()),
-                html.Div(id="card-accepted", style=_card_style()),
+                # html.Div(id="card-accepted", style=_card_style()),
                 html.Div(id="card-rejected", style=_card_style()),
                 html.Div(id="card-reject-ratio", style=_card_style()),
                 html.Div(id="card-uptime", style=_card_style()),
@@ -265,7 +265,7 @@ app.layout = html.Div(
 
 @app.callback(
     Output("card-height", "children"),
-    Output("card-accepted", "children"),
+    # Output("card-accepted", "children"),
     Output("card-rejected", "children"),
     Output("card-reject-ratio", "children"),
     Output("card-uptime", "children"),
@@ -278,7 +278,6 @@ app.layout = html.Div(
     Output("status-line", "children"),
     Input("tick", "n_intervals"),
 )
-
 def refresh(_n: int):
     """
     Periodically refresh dashboard by pulling data from the coordinator endpoints.
@@ -293,7 +292,7 @@ def refresh(_n: int):
 
         return (
             make_card("Chain height", "—", "Coordinator not reachable"),
-            make_card("Blocks accepted", "—"),
+            # make_card("Blocks accepted", "—"),
             make_card("Rejected total", "—"),
             make_card("Reject ratio", "—"),
             make_card("Uptime", "—"),
@@ -315,7 +314,7 @@ def refresh(_n: int):
     uptime_ms = int(metrics.get("uptime_ms", 0))
 
     card_height = make_card("Chain height", str(height), "Tip height")
-    card_accepted = make_card("Blocks accepted", str(blocks_accepted), "Excluding genesis")
+    # card_accepted = make_card("Blocks accepted", str(blocks_accepted), "Excluding genesis")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
 
@@ -464,7 +463,7 @@ def refresh(_n: int):
 
     return (
         card_height,
-        card_accepted,
+        # card_accepted,
         card_rejected,
         card_ratio,
         card_uptime,
