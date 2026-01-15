@@ -1,4 +1,5 @@
 import time
+import random
 import requests
 import argparse
 
@@ -54,6 +55,10 @@ def mine_once(coordinator_url: str, miner_id: str):
                 "miner_id": miner_id,
                 "timestamp_ms": mined_ts,
             }
+
+            # Simulate network latency (10-100ms random delay)
+            network_delay = random.uniform(0.01, 0.1)
+            time.sleep(network_delay)
 
             # Submit the block to the coordinator for validation.
             r = requests.post(
