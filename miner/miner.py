@@ -56,8 +56,8 @@ def mine_once(coordinator_url: str, miner_id: str):
                 "timestamp_ms": mined_ts,
             }
 
-            # Simulate network latency (10-100ms random delay)
-            network_delay = random.uniform(0.01, 0.1)
+            # Simulate network latency
+            network_delay = random.uniform(0, 0.6)
             time.sleep(network_delay)
 
             # Submit the block to the coordinator for validation.

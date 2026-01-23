@@ -25,7 +25,7 @@ def get_template() -> BlockTemplate:
     Miners should try to find a nonce such that:
         hash(height | prev_hash | nonce) < target(difficulty)
     """
-    tip = chain.tip()
+    tip = chain.best_tip()
     return BlockTemplate(
         height=tip.height + 1,
         prev_hash=tip.block_hash,
@@ -75,13 +75,16 @@ def get_metrics() -> Metrics:
     """
     return Metrics(
         height=chain.height(),
-        blocks_accepted=len(chain.blocks) - 1,  # exclude genesis
+        blocks_accepted=len(chain.blocks_by_hash) - 1,  # exclude genesis
         avg_block_time_ms=chain.avg_block_time_ms(),
         last_block_time_ms=chain.last_block_time_ms(),
         accepted_by_miner=chain.accepted_by_miner,
         rejected_total=chain.rejected_total,
         rejected_by_reason=chain.rejected_by_reason,
         uptime_ms=chain.uptime_ms(),
+        forks_detected=chain.forks_detected,
+        reorg_count=chain.reorg_count,
+        orphan_count=chain.orphan_count(),
     )
 
 
@@ -91,20 +94,28 @@ def get_chain(limit: int = 20) -> ChainView:
     Return a snapshot of the last N blocks.
     This endpoint is meant for humans (inspection) and for dashboards.
     """
-    blocks = chain.get_last_blocks(limit=limit)
+    blocks = chain.get_main_chain_blocks(limit=limit)
     view_blocks = [
-        ChainBlock(
-            height=b.height,
-            prev_hash=b.prev_hash,
-            nonce=b.nonce,
-            miner_id=b.miner_id,
-            mined_timestamp_ms=b.mined_timestamp_ms,
-            accepted_timestamp_ms=b.accepted_timestamp_ms,
-            block_hash=b.block_hash,
-        )
+        ChainBlock(**b.__dict__)
         for b in blocks
     ]
 
+    return ChainView(
+        tip_height=chain.height(),
+        difficulty_bits=chain.difficulty_bits,
+        blocks=view_blocks,
+    )
+
+@app.get("/blocks", response_model=ChainView)
+def get_blocks(limit: int = 20) -> ChainView:
+    """
+    Recent blocks across all branches (debug/visualiz
+    """
+    blocks = chain.get_recent_blocks(limit=limit)
+    view_blocks = [
+        ChainBlock(**b.__dict__)
+        for b in blocks
+    ]
     return ChainView(
         tip_height=chain.height(),
         difficulty_bits=chain.difficulty_bits,

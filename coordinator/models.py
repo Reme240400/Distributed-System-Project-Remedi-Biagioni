@@ -62,6 +62,10 @@ class Metrics(BaseModel):
     rejected_by_reason: Dict[str, int]
     uptime_ms: int
 
+    forks_detected: int
+    reorg_count: int
+    orphan_count: int
+
 class ChainBlock(BaseModel):
     """
     Public representation of a block for inspection/monitoring endpoints.

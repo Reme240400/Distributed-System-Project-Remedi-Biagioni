@@ -160,6 +160,9 @@ app.layout = html.Div(
                 html.Div(id="card-rejected", style=_card_style()),
                 html.Div(id="card-reject-ratio", style=_card_style()),
                 html.Div(id="card-uptime", style=_card_style()),
+                html.Div(id="card-forks", style=_card_style()),
+                html.Div(id="card-orphans", style=_card_style()),
+                html.Div(id="card-reorgs", style=_card_style()),
             ],
         ),
 
@@ -251,6 +254,9 @@ app.layout = html.Div(
     Output("card-rejected", "children"),
     Output("card-reject-ratio", "children"),
     Output("card-uptime", "children"),
+    Output("card-forks", "children"),
+    Output("card-orphans", "children"),
+    Output("card-reorgs", "children"),
     Output("graph-block-time", "figure"),
     Output("graph-accepted-by-miner", "figure"),
     Output("graph-reject-rate", "figure"),
@@ -276,6 +282,9 @@ def refresh(_n: int):
             make_card("Rejected total", "—"),
             make_card("Reject ratio", "—"),
             make_card("Uptime", "—"),
+            make_card("Forks detected", "—"),
+            make_card("Orphan blocks", "—"),
+            make_card("Reorgs", "—"),
             empty,  # block time
             empty,  # accepted by miner
             empty,  # reject rate
@@ -291,10 +300,16 @@ def refresh(_n: int):
     blocks_accepted = int(metrics.get("blocks_accepted", 0))
     rejected_total = int(metrics.get("rejected_total", 0))
     uptime_ms = int(metrics.get("uptime_ms", 0))
+    forks_detected = int(metrics.get("forks_detected", 0))
+    orphan_count = int(metrics.get("orphan_count", 0))
+    reorg_count = int(metrics.get("reorg_count", 0))
 
     card_height = make_card("Chain height", str(height), "Tip height")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
+    card_forks = make_card("Forks detected", str(forks_detected), "Points with multiple children")
+    card_orphans = make_card("Orphan blocks", str(orphan_count), "Blocks not in main chain")
+    card_reorgs = make_card("Reorgs", str(reorg_count), "Chain reorganizations")
 
     # ---------------------------
     # Update dashboard-side time series (single append per tick)
@@ -418,6 +433,9 @@ def refresh(_n: int):
         card_rejected,
         card_ratio,
         card_uptime,
+        card_forks,
+        card_orphans,
+        card_reorgs,
         fig_block_time,
         fig_accepted,
         fig_reject_rate,
