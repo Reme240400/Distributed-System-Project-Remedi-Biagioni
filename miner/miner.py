@@ -8,6 +8,9 @@ import argparse
 # - sha256_hex: computes the SHA-256 hash
 # - has_leading_zero_bits: checks if the hash satisfies the difficulty (hash < target)
 from coordinator.pow import header_bytes, sha256_hex, has_leading_zero_bits
+TEMPLATE_REFRESH_RATE = 1
+template_counter = 0
+cached_tpl = None
 
 
 def mine_once(coordinator_url: str, miner_id: str):
@@ -23,16 +26,23 @@ def mine_once(coordinator_url: str, miner_id: str):
     - nonce found
     - block hash
     """
-
+    global template_counter, cached_tpl
     # Request the current block template from the coordinator.
     # The template defines the current blockchain state.
-    tpl = requests.get(f"{coordinator_url}/template", timeout=5).json()
-    height = tpl["height"]
-    prev_hash = tpl["prev_hash"]
-    difficulty_bits = tpl["difficulty_bits"]
+    # Aggiorna il template solo 1 volta ogni 50
+    if template_counter % TEMPLATE_REFRESH_RATE == 0 or cached_tpl is None:
+        cached_tpl = requests.get(
+            f"{coordinator_url}/template",
+            timeout=5
+        ).json()
+
+    template_counter += 1
+    height = cached_tpl["height"]
+    prev_hash = cached_tpl["prev_hash"]
+    difficulty_bits = cached_tpl["difficulty_bits"]
 
     # The nonce is the only value the miner can freely change.
-    nonce = 0
+    nonce = random.randint(0, 2**32 - 1)
 
     # Start time used to measure mining duration.
     start = time.time()
