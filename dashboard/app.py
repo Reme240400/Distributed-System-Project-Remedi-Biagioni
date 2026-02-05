@@ -444,70 +444,39 @@ def refresh(_n: int):
     fig_tree = go.Figure()
     
     if all_blocks_tree:
-        # Build tree structure and assign stable Y-coordinates (lanes)
-        children_by_parent = defaultdict(list)
-        block_by_hash = {}
-        genesis_hashes = []
-
+        by_height = defaultdict(list)
         for b in all_blocks_tree:
-            h = b['block_hash']
-            block_by_hash[h] = b
-            if b['height'] == 0:
-                genesis_hashes.append(h)
-            
-            p = b.get('prev_hash')
-            if p:
-                children_by_parent[p].append(b)
-
-        # Sort children by timestamp (arrival order) to ensure the "first" branch keeps the lane
-        for p in children_by_parent:
-            children_by_parent[p].sort(key=lambda x: (x.get('accepted_timestamp_ms', 0), x['block_hash']))
-
-        layout_map = {} # hash -> (x, y)
-        lane_map = {}   # hash -> lane_y
+            by_height[b['height']].append(b)
         
-        # Lane allocator: 0, 1, -1, 2, -2, ...
-        next_lane_idx = 1
+        layout_map = {}
+        occupied = set()
         
-        def get_next_lane():
-            nonlocal next_lane_idx
-            # Map 1->1, 2->-1, 3->2, 4->-2 ...
-            val = (next_lane_idx + 1) // 2
-            if next_lane_idx % 2 == 0:
-                val = -val
-            next_lane_idx += 1
-            return val
-
-        # BFS to assign coordinates
-        queue = []
-        for gh in sorted(genesis_hashes):
-            lane_map[gh] = 0
-            queue.append(gh)
-        
-        while queue:
-            curr_h = queue.pop(0)
-            curr_b = block_by_hash.get(curr_h)
-            if not curr_b: continue
+        for h in sorted(by_height.keys()):
+            # Sort blocks: older timestamp first => tends to keep the "original" branch straight
+            blks = sorted(by_height[h], key=lambda b: (b.get('accepted_timestamp_ms', 0), b['block_hash']))
             
-            # Assign coordinate
-            y = lane_map[curr_h]
-            layout_map[curr_h] = (curr_b['height'], y)
-            
-            # Process children
-            children = children_by_parent.get(curr_h, [])
-            if not children:
-                continue
+            for b in blks:
+                # 1. Determine preferred Y (inherit from parent)
+                target_y = 0
+                ph = b.get('prev_hash')
+                if ph and ph in layout_map:
+                    target_y = layout_map[ph][1]
                 
-            # First child (earliest) continues the parent's lane (straight)
-            first_child = children[0]
-            lane_map[first_child['block_hash']] = y
-            queue.append(first_child['block_hash'])
-            
-            # Subsequent children (forks) get new unique lanes
-            for child in children[1:]:
-                new_y = get_next_lane()
-                lane_map[child['block_hash']] = new_y
-                queue.append(child['block_hash'])
+                # 2. Find nearest available Y at this height
+                y = target_y
+                if (h, y) in occupied:
+                    offset = 1
+                    base_y = target_y
+                    while (h, y) in occupied:
+                        delta = (offset + 1) // 2 # 1, 1, 2, 2, 3, 3...
+                        if offset % 2 != 0:
+                            y = base_y + delta    # +1, +2...
+                        else:
+                            y = base_y - delta    # -1, -2...
+                        offset += 1
+                
+                layout_map[b['block_hash']] = (h, y)
+                occupied.add((h, y))
                 
         node_x = []
         node_y = []
@@ -526,8 +495,7 @@ def refresh(_n: int):
             
             miner = b.get('miner_id', '?')
             ts = b.get('accepted_timestamp_ms', 0)
-            ph = b.get('prev_hash', '?')
-            node_text.append(f"H={x}<br>Miner={miner}<br>Hash={bh[:8]}<br>Prev={ph[:8]}<br>TS={ts}")
+            node_text.append(f"H={x}<br>Miner={miner}<br>Hash={bh[:8]}<br>TS={ts}")
             
         edge_x = []
         edge_y = []

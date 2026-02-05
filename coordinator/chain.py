@@ -243,21 +243,21 @@ class Chain:
 
     def _update_best_tip(self) -> None:
         best_tip = self.best_tip_hash
-        choose_random = False
 
-        candidates = []
+        # choose_random = False
+        # candidates = []
 
         for h in self.tips:
-            if self.blocks_by_hash[h].height + 2 > self.blocks_by_hash[best_tip].height:
+            if self.blocks_by_hash[h].height + 4 > self.blocks_by_hash[best_tip].height:
                 best_tip = h
-                choose_random = False
+                # choose_random = False
                 break
-            elif self.blocks_by_hash[h].height == self.blocks_by_hash[best_tip].height:
-                choose_random = True
-                candidates.append(h)
+            # elif self.blocks_by_hash[h].height == self.blocks_by_hash[best_tip].height:
+            #     choose_random = True
+            #     candidates.append(h)
 
-        if choose_random:
-            best_tip = random.choice(candidates)
+        # if choose_random:
+        #     best_tip = random.choice(candidates)
 
         self.best_tip_hash = best_tip
 

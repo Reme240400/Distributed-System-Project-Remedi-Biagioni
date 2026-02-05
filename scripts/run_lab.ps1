@@ -34,15 +34,14 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
-$needsInstall = python -m pip install -r requirements.txt --dry-run 2>&1 | 
-                Select-String "Would install"
-if ($needsInstall) {
-    Write-Host "Installing dependencies..."
-    python -m pip install -r requirements.txt --quiet
-    Write-Host "Dependencies installed."
-} else {
-    Write-Host "Dependencies already satisfied."
-}
+# $needsInstall = python -m pip install -r requirements.txt --dry-run 2>&1 | Select-String "Would install"
+# if ($needsInstall) {
+#     Write-Host "Installing dependencies..."
+#     python -m pip install -r requirements.txt --quiet
+#     Write-Host "Dependencies installed."
+# } else {
+#     Write-Host "Dependencies already satisfied."
+# }
 
 $CoordinatorUrl = "http://$CoordinatorHost`:$CoordinatorPort"
 
