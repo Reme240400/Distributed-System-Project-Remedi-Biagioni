@@ -1,6 +1,7 @@
 import os
 import time
 from typing import Any, Dict, List, Tuple
+from collections import defaultdict
 
 import requests
 from dash import Dash, dcc, html, dash_table
@@ -92,6 +93,24 @@ def fetch_chain(limit: int) -> Dict[str, Any]:
     """
     return fetch_json(f"{COORDINATOR_URL}/chain?limit={limit}")
 
+def fetch_blocks(limit: int) -> List[Dict[str, Any]]:
+    """
+    Fetch /blocks from the coordinator.
+    """
+    chain_view = fetch_json(f"{COORDINATOR_URL}/blocks?limit={limit}")
+    return chain_view.get("blocks", [])
+
+def fetch_all_blocks() -> List[Dict[str, Any]]:
+    """
+    Fetch all blocks from the coordinator for graph visualization.
+    """
+    try:
+        resp = requests.get(f"{COORDINATOR_URL}/all-blocks", timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return []
+
 
 def compute_block_times(chain_blocks: List[Dict[str, Any]]) -> List[Tuple[int, int]]:
     """
@@ -163,6 +182,15 @@ app.layout = html.Div(
                 html.Div(id="card-forks", style=_card_style()),
                 html.Div(id="card-orphans", style=_card_style()),
                 html.Div(id="card-reorgs", style=_card_style()),
+            ],
+        ),
+
+        # Block Tree Graph
+        html.Div(
+            style={"marginBottom": "12px", "padding": "12px", "border": "1px solid #eee", "borderRadius": "8px"},
+            children=[
+                html.H4("Block Tree (All Blocks)", style={"marginBottom": "4px"}),
+                dcc.Graph(id="graph-block-tree", config={"displayModeBar": True}, style={"height": "400px"}),
             ],
         ),
 
@@ -261,6 +289,7 @@ app.layout = html.Div(
     Output("graph-accepted-by-miner", "figure"),
     Output("graph-reject-rate", "figure"),
     Output("graph-reject-ratio", "figure"),
+    Output("graph-block-tree", "figure"),
     Output("table-blocks", "data"),
     Output("status-line", "children"),
     Input("tick", "n_intervals"),
@@ -270,10 +299,10 @@ def refresh(_n: int):
     Periodically refresh dashboard by pulling data from the coordinator endpoints.
     """
     metrics = fetch_metrics()
-    chain_view = fetch_chain(CHAIN_LIMIT)
+    blocks = fetch_blocks(CHAIN_LIMIT)
 
     # If coordinator is unreachable, return placeholders (must match Output order).
-    if not metrics or not chain_view or "blocks" not in chain_view:
+    if not metrics or not blocks:
         empty = go.Figure()
         empty.update_layout(height=360, autosize=False, margin=dict(l=30, r=10, t=10, b=30))
 
@@ -289,6 +318,7 @@ def refresh(_n: int):
             empty,  # accepted by miner
             empty,  # reject rate
             empty,  # reject ratio
+            empty,  # block tree
             [],     # table
             f"Waiting for coordinator at {COORDINATOR_URL} ...",
         )
@@ -329,7 +359,6 @@ def refresh(_n: int):
     # ---------------------------
     # Chain blocks and derived values
     # ---------------------------
-    blocks = chain_view["blocks"]
 
     # --- Block time chart ---
     bt = compute_block_times(blocks)  # list of (height, delta_ms)
@@ -410,6 +439,133 @@ def refresh(_n: int):
     total_ratio = (rejected_total / total_denom) if total_denom > 0 else 0.0
     card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)")
 
+    # --- Block Tree Visualization ---
+    all_blocks_tree = fetch_all_blocks()
+    fig_tree = go.Figure()
+    
+    if all_blocks_tree:
+        # Build tree structure and assign stable Y-coordinates (lanes)
+        children_by_parent = defaultdict(list)
+        block_by_hash = {}
+        genesis_hashes = []
+
+        for b in all_blocks_tree:
+            h = b['block_hash']
+            block_by_hash[h] = b
+            if b['height'] == 0:
+                genesis_hashes.append(h)
+            
+            p = b.get('prev_hash')
+            if p:
+                children_by_parent[p].append(b)
+
+        # Sort children by timestamp (arrival order) to ensure the "first" branch keeps the lane
+        for p in children_by_parent:
+            children_by_parent[p].sort(key=lambda x: (x.get('accepted_timestamp_ms', 0), x['block_hash']))
+
+        layout_map = {} # hash -> (x, y)
+        lane_map = {}   # hash -> lane_y
+        
+        # Lane allocator: 0, 1, -1, 2, -2, ...
+        next_lane_idx = 1
+        
+        def get_next_lane():
+            nonlocal next_lane_idx
+            # Map 1->1, 2->-1, 3->2, 4->-2 ...
+            val = (next_lane_idx + 1) // 2
+            if next_lane_idx % 2 == 0:
+                val = -val
+            next_lane_idx += 1
+            return val
+
+        # BFS to assign coordinates
+        queue = []
+        for gh in sorted(genesis_hashes):
+            lane_map[gh] = 0
+            queue.append(gh)
+        
+        while queue:
+            curr_h = queue.pop(0)
+            curr_b = block_by_hash.get(curr_h)
+            if not curr_b: continue
+            
+            # Assign coordinate
+            y = lane_map[curr_h]
+            layout_map[curr_h] = (curr_b['height'], y)
+            
+            # Process children
+            children = children_by_parent.get(curr_h, [])
+            if not children:
+                continue
+                
+            # First child (earliest) continues the parent's lane (straight)
+            first_child = children[0]
+            lane_map[first_child['block_hash']] = y
+            queue.append(first_child['block_hash'])
+            
+            # Subsequent children (forks) get new unique lanes
+            for child in children[1:]:
+                new_y = get_next_lane()
+                lane_map[child['block_hash']] = new_y
+                queue.append(child['block_hash'])
+                
+        node_x = []
+        node_y = []
+        node_color = []
+        node_text = []
+        
+        for b in all_blocks_tree:
+            bh = b['block_hash']
+            if bh not in layout_map: continue
+
+            x, y = layout_map[bh]
+            node_x.append(x)
+            node_y.append(y)
+            color = 'green' if b.get('on_main_chain') else 'red'
+            node_color.append(color)
+            
+            miner = b.get('miner_id', '?')
+            ts = b.get('accepted_timestamp_ms', 0)
+            ph = b.get('prev_hash', '?')
+            node_text.append(f"H={x}<br>Miner={miner}<br>Hash={bh[:8]}<br>Prev={ph[:8]}<br>TS={ts}")
+            
+        edge_x = []
+        edge_y = []
+        for b in all_blocks_tree:
+            bh = b['block_hash']
+            ph = b['prev_hash']
+            if bh in layout_map and ph in layout_map:
+                x0, y0 = layout_map[ph]
+                x1, y1 = layout_map[bh]
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+
+        fig_tree.add_trace(go.Scatter(
+            x=edge_x, y=edge_y,
+            mode='lines',
+            line=dict(color='#888', width=1),
+            hoverinfo='none',
+            name='link'
+        ))
+        
+        fig_tree.add_trace(go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers',
+            marker=dict(symbol='circle', size=10, color=node_color),
+            text=node_text,
+            hoverinfo='text',
+            name='block'
+        ))
+
+    fig_tree.update_layout(
+        title="Block DAG (Green=Main, Red=Orphan/Stale)",
+        showlegend=False,
+        xaxis_title="Height",
+        yaxis_title="Branch Offset",
+        height=400,
+        margin=dict(l=30, r=10, t=40, b=30),
+    )
+
     # --- Blocks table (last blocks) ---
     blocks_sorted = sorted(blocks, key=lambda b: b["height"], reverse=True)
     table_data = []
@@ -440,6 +596,7 @@ def refresh(_n: int):
         fig_accepted,
         fig_reject_rate,
         fig_reject_ratio,
+        fig_tree,
         table_data,
         status,
     )

@@ -77,6 +77,7 @@ class ChainBlock(BaseModel):
     mined_timestamp_ms: int
     accepted_timestamp_ms: int
     block_hash: str
+    on_main_chain: bool = False
     
 class ChainView(BaseModel):
     """

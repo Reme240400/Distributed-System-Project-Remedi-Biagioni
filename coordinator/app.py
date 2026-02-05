@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from typing import List
 from .models import BlockTemplate, BlockSubmission, BlockAccepted, Metrics, ChainView, ChainBlock
 from .chain import Chain
 import logging
@@ -105,6 +106,21 @@ def get_chain(limit: int = 20) -> ChainView:
         difficulty_bits=chain.difficulty_bits,
         blocks=view_blocks,
     )
+
+
+@app.get("/all-blocks", response_model=List[ChainBlock])
+def get_all_blocks() -> List[ChainBlock]:
+    """
+    Return ALL blocks (including orphans/stale) known to the coordinator.
+    Useful for visualizing the block tree.
+    """
+    blocks = chain.get_all_blocks()
+    out = []
+    for b in blocks:
+        cb = ChainBlock(**b.__dict__)
+        cb.on_main_chain = (b.block_hash in chain.main_chain_hashes)
+        out.append(cb)
+    return out
 
 @app.get("/blocks", response_model=ChainView)
 def get_blocks(limit: int = 20) -> ChainView:

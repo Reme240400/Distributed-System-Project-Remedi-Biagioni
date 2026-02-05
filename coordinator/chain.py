@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import time
 from .pow import header_bytes, sha256_hex, has_leading_zero_bits
+import random
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,14 @@ class Chain:
         out.reverse() # genesis -> tip
         return out
 
+    def get_all_blocks(self) -> List[Block]:
+        """
+        Return all blocks (orphans, stale, main chain) sorted by height.
+        """
+        all_b = list(self.blocks_by_hash.values())
+        all_b.sort(key=lambda b: b.height)
+        return all_b
+
     def get_recent_blocks(self, limit: int = 50) -> List[Block]:
         """
         Return the most recent accepted blocks across ALL branches (best-effort).
@@ -206,6 +215,7 @@ class Chain:
         # Count accepted block
         self.accepted_by_miner[miner_id] = self.accepted_by_miner.get(miner_id, 0) + 1
 
+        # Update best tip and main chain
         old_best_tip_hash = self.best_tip_hash
         self._update_best_tip()
         if self.best_tip_hash != old_best_tip_hash:
@@ -233,13 +243,21 @@ class Chain:
 
     def _update_best_tip(self) -> None:
         best_tip = self.best_tip_hash
+        choose_random = False
+
+        candidates = []
+
         for h in self.tips:
-            if self.blocks_by_hash[h].height > self.blocks_by_hash[best_tip].height:
+            if self.blocks_by_hash[h].height + 2 > self.blocks_by_hash[best_tip].height:
                 best_tip = h
+                choose_random = False
+                break
             elif self.blocks_by_hash[h].height == self.blocks_by_hash[best_tip].height:
-                # Tie-breaker: lower hash wins
-                if h < best_tip:
-                    best_tip = h
+                choose_random = True
+                candidates.append(h)
+
+        if choose_random:
+            best_tip = random.choice(candidates)
 
         self.best_tip_hash = best_tip
 
