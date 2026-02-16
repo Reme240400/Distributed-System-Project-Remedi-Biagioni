@@ -227,19 +227,6 @@ app.layout = html.Div(
                 ),
             ],
         ),
-        
-        # Charts row (3)
-        html.Div(
-            style={"marginTop": "12px"},
-            children=[
-                html.H4("Reject ratio over time", style={"marginBottom": "4px"}),
-                dcc.Graph(
-                    id="graph-reject-ratio",
-                    config={"displayModeBar": False},
-                    style={"height": "360px"},
-                ),
-            ],
-        ),
 
 
         html.H4("Last blocks", style={"marginTop": "16px", "marginBottom": "6px"}),
@@ -253,7 +240,7 @@ app.layout = html.Div(
                 {"name": "hash", "id": "block_hash_short"},
                 {"name": "prev_hash", "id": "prev_hash_short"},
                 {"name": "nonce", "id": "nonce"},
-                {"name": "accepted_ts", "id": "accepted_timestamp_ms"},
+                {"name": "accepted timestamp", "id": "accepted_timestamp_ms"},
             ],
             data=[],
             page_size=15,
@@ -288,7 +275,6 @@ app.layout = html.Div(
     Output("graph-block-time", "figure"),
     Output("graph-accepted-by-miner", "figure"),
     Output("graph-reject-rate", "figure"),
-    Output("graph-reject-ratio", "figure"),
     Output("graph-block-tree", "figure"),
     Output("table-blocks", "data"),
     Output("status-line", "children"),
@@ -318,10 +304,12 @@ def refresh(_n: int):
             empty,  # accepted by miner
             empty,  # reject rate
             empty,  # reject ratio
-            empty,  # block tree
-            [],     # table
+            empty,  # table
             f"Waiting for coordinator at {COORDINATOR_URL} ...",
         )
+    
+    # Fetch all blocks tree early (needed for miner chart split also)
+    all_blocks_tree = fetch_all_blocks()
 
     # ---------------------------
     # Read metrics (convert counters to int for safe arithmetic)
@@ -375,17 +363,70 @@ def refresh(_n: int):
     )
 
     # --- Accepted by miner bar chart ---
-    accepted_by_miner = metrics.get("accepted_by_miner", {}) or {}
-    miners = list(accepted_by_miner.keys())
-    counts = [int(accepted_by_miner[m]) for m in miners]
+    # Re-calculate accepted vs orphan from all_blocks_tree
+    miner_main_counts = defaultdict(int)
+    miner_orphan_counts = defaultdict(int)
+    all_miners = set()
+
+    # 1. Try to use detailed tree info first
+    if all_blocks_tree:
+        for b in all_blocks_tree:
+            # Filter genesis
+            if b.get('height') == 0:
+                continue
+
+            mid = b.get('miner_id', 'unknown')
+            all_miners.add(mid)
+            if b.get('on_main_chain'):
+                miner_main_counts[mid] += 1
+            else:
+                miner_orphan_counts[mid] += 1
+    else:
+        # 2. Fallback to metrics if tree unavailable (assume all valid=main)
+        raw_accepted = metrics.get("accepted_by_miner", {}) or {}
+        for m, count in raw_accepted.items():
+            all_miners.add(m)
+            miner_main_counts[m] = int(count)
+
+    # Sort miners for consistent axis
+    sorted_miners = sorted(list(all_miners))
+    
+    main_vals = [miner_main_counts[m] for m in sorted_miners]
+    orphan_vals = [miner_orphan_counts[m] for m in sorted_miners]
 
     fig_accepted = go.Figure()
-    fig_accepted.add_trace(go.Bar(x=miners, y=counts, name="accepted"))
+    
+    # Trace 1: Main Chain
+    fig_accepted.add_trace(go.Bar(
+        x=sorted_miners, 
+        y=main_vals, 
+        name="Main Chain",
+        marker_color="green"
+    ))
+    
+    # Trace 2: Stale
+    fig_accepted.add_trace(go.Bar(
+        x=sorted_miners, 
+        y=orphan_vals, 
+        name="Stale",
+        marker_color="red"
+    ))
+
     fig_accepted.update_layout(
         height=360, autosize=False,
-        margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Miner",
+        margin=dict(l=30, r=10, t=10, b=50),
+        xaxis_title="Miners",
         yaxis_title="Accepted blocks",
+        barmode='group',
+        bargap=0.2,       # Gap between miners
+        bargroupgap=0.0,  # Zero gap between Main/Stale bars of same miner ("attaccate")
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
 
     # --- Reject rate over time ---
@@ -410,37 +451,13 @@ def refresh(_n: int):
         yaxis_title="Rejects / second",
     )
 
-    # --- Reject ratio over time (cumulative total) ---
-    ratio_x: List[float] = []
-    ratio_y: List[float] = []
-
-    n = min(len(_reject_series), len(_accept_series))
-    for i in range(n):
-        t, r = _reject_series[i]
-        _, a = _accept_series[i]
-        denom = r + a
-        ratio = (r / denom) if denom > 0 else 0.0
-        ratio_x.append(t)
-        ratio_y.append(ratio)
-
-    fig_reject_ratio = go.Figure()
-    if ratio_x:
-        fig_reject_ratio.add_trace(go.Scatter(x=ratio_x, y=ratio_y, mode="lines+markers", name="reject_ratio"))
-    fig_reject_ratio.update_layout(
-        height=360, autosize=False,
-        margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Time (seconds since dashboard start)",
-        yaxis_title="Reject ratio (0..1)",
-        yaxis=dict(range=[0, 1]),
-    )
-
     # Compute total reject ratio for card
     total_denom = rejected_total + blocks_accepted
     total_ratio = (rejected_total / total_denom) if total_denom > 0 else 0.0
     card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)")
 
     # --- Block Tree Visualization ---
-    all_blocks_tree = fetch_all_blocks()
+    # all_blocks_tree already fetched above
     fig_tree = go.Figure()
     
     if all_blocks_tree:
@@ -550,7 +567,7 @@ def refresh(_n: int):
     # --- Status line ---
     avg_bt = float(metrics.get("avg_block_time_ms", 0.0))
     last_bt = metrics.get("last_block_time_ms", None)
-    status = f"avg_block_time={avg_bt:.1f}ms | last_block_time={last_bt}ms | miners={len(miners)}"
+    status = f"avg_block_time={avg_bt:.1f}ms | last_block_time={last_bt}ms | miners={len(sorted_miners)}"
 
     return (
         card_height,
@@ -563,15 +580,10 @@ def refresh(_n: int):
         fig_block_time,
         fig_accepted,
         fig_reject_rate,
-        fig_reject_ratio,
         fig_tree,
         table_data,
         status,
     )
-
-
-
-
 
 if __name__ == "__main__":
     # Run dashboard locally. Start the coordinator first.
