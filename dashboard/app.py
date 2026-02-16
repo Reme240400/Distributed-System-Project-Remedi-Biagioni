@@ -349,17 +349,29 @@ def refresh(_n: int):
     # ---------------------------
 
     # --- Block time chart ---
-    bt = compute_block_times(blocks)  # list of (height, delta_ms)
+    # Use main chain blocks only for meaningful time deltas. 
+    # Otherwise, deltas between parallel/orphan blocks (same height) appear as near-zero.
+    if all_blocks_tree:
+        main_chain = [b for b in all_blocks_tree if b.get('on_main_chain')]
+        main_chain.sort(key=lambda b: b['height'])
+        # Take last N blocks to respect window
+        chain_slice = main_chain[-CHAIN_LIMIT:]
+        bt = compute_block_times(chain_slice)
+    else:
+        # Fallback if tree is empty
+        bt = compute_block_times(blocks)
+
     fig_block_time = go.Figure()
     if bt:
         x = [h for (h, _dt) in bt]
-        y = [_dt for (_h, _dt) in bt]
-        fig_block_time.add_trace(go.Scatter(x=x, y=y, mode="lines+markers", name="block_time_ms"))
+        # Convert ms to seconds for better readability
+        y = [_dt / 1000.0 for (_h, _dt) in bt]
+        fig_block_time.add_trace(go.Scatter(x=x, y=y, mode="lines+markers", name="block_time_s"))
     fig_block_time.update_layout(
         height=360, autosize=False,
         margin=dict(l=30, r=10, t=10, b=30),
-        xaxis_title="Block height",
-        yaxis_title="Δ accepted_timestamp (ms)",
+        xaxis_title="Block height (Main Chain)",
+        yaxis_title="Block time (seconds)",
     )
 
     # --- Accepted by miner bar chart ---
