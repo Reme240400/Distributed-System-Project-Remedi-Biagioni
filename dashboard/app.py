@@ -599,5 +599,6 @@ def refresh(_n: int):
 
 if __name__ == "__main__":
     # Run dashboard locally. Start the coordinator first.
-    app.run(host="127.0.0.1", port=8050, debug=False)
-
+    host = os.getenv("DASH_HOST", "127.0.0.1")
+    port = int(os.getenv("DASHBOARD_PORT", "8050"))
+    app.run(host=host, port=port, debug=False)
