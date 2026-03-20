@@ -3,15 +3,9 @@ import random
 import requests
 import argparse
 import struct
-
 import cupy as cp
 
-# riusa le stesse funzioni PoW del progetto (ora con header binario fisso)
-from coordinator.pow import sha256_hex  # solo per stampare hash (da bytes)
-TEMPLATE_REFRESH_RATE = 1
-template_counter = 0
 cached_tpl = None
-
 
 _SHA256_KERNEL = r'''
 extern "C" {
@@ -61,11 +55,6 @@ __device__ __forceinline__ bool leading_zero_bits_ok(const unsigned char* d, int
     return (d[full] & mask) == 0;
 }
 
-/*
-prefix36 = height(4 LE) + prev_hash(32 bytes)
-message = prefix36 + nonce(4 LE) => 40 bytes
-padding => single 64-byte block, bitlen=320
-*/
 __global__ void sha256_search(
     const unsigned char* prefix36,
     unsigned start_nonce,
@@ -77,7 +66,6 @@ __global__ void sha256_search(
     unsigned idx = (unsigned)(blockIdx.x * blockDim.x + threadIdx.x);
     if (idx >= n_nonces) return;
 
-    // cheap early exit
     if (atomicAdd(found_nonce, 0) != 0xFFFFFFFFu) return;
 
     unsigned nonce = start_nonce + idx;
@@ -86,7 +74,6 @@ __global__ void sha256_search(
     #pragma unroll
     for (int i = 0; i < 36; i++) m[i] = prefix36[i];
 
-    // nonce LE
     m[36] = (unsigned char)(nonce & 0xFFu);
     m[37] = (unsigned char)((nonce >> 8) & 0xFFu);
     m[38] = (unsigned char)((nonce >> 16) & 0xFFu);
@@ -96,7 +83,6 @@ __global__ void sha256_search(
     #pragma unroll
     for (int i = 41; i < 56; i++) m[i] = 0;
 
-    // bitlen 320 = 0x0000000000000140 (BE)
     m[56]=0; m[57]=0; m[58]=0; m[59]=0;
     m[60]=0; m[61]=0; m[62]=0x01u; m[63]=0x40u;
 
@@ -150,11 +136,18 @@ __global__ void sha256_search(
         }
     }
 }
-
 } // extern "C"
 '''
 
 _kernel = cp.RawKernel(_SHA256_KERNEL, "sha256_search")
+
+
+def fetch_template(coordinator_url: str):
+    return requests.get(f"{coordinator_url}/template", timeout=5).json()
+
+
+def fetch_head(coordinator_url: str):
+    return requests.get(f"{coordinator_url}/head", timeout=3).json()
 
 
 def gpu_search(prefix36: bytes, start_nonce: int, batch: int, difficulty_bits: int):
@@ -188,18 +181,24 @@ def gpu_search(prefix36: bytes, start_nonce: int, batch: int, difficulty_bits: i
     return True, nonce, hbytes, (t1 - t0)
 
 
-def mine_once(coordinator_url: str, miner_id: str, gpu_batch: int, refresh_rate: int):
-    global template_counter, cached_tpl
+def mine_once(
+    coordinator_url: str,
+    miner_id: str,
+    gpu_batch: int,
+    head_poll_ms: int,
+    switch_lag_blocks: int,
+    network_delay_min_ms: int,
+    network_delay_max_ms: int,
+):
+    global cached_tpl
 
-    if template_counter % refresh_rate == 0 or cached_tpl is None:
-        cached_tpl = requests.get(f"{coordinator_url}/template", timeout=5).json()
-    template_counter += 1
+    if cached_tpl is None:
+        cached_tpl = fetch_template(coordinator_url)
 
     height = cached_tpl["height"]
     prev_hash = cached_tpl["prev_hash"]
     difficulty_bits = cached_tpl["difficulty_bits"]
 
-    # prefix36 = height(4 LE) + prev_hash(32 bytes)
     prefix36 = struct.pack("<I", height) + bytes.fromhex(prev_hash)
 
     start = time.time()
@@ -207,6 +206,9 @@ def mine_once(coordinator_url: str, miner_id: str, gpu_batch: int, refresh_rate:
 
     total_kernel_time = 0.0
     total_tested = 0
+
+    poll_s = (head_poll_ms / 1000.0) if head_poll_ms and head_poll_ms > 0 else 0.0
+    next_head_check = time.monotonic() + poll_s if poll_s > 0 else 0.0
 
     while True:
         found, nonce, hbytes, kdt = gpu_search(prefix36, start_nonce, gpu_batch, difficulty_bits)
@@ -225,32 +227,78 @@ def mine_once(coordinator_url: str, miner_id: str, gpu_batch: int, refresh_rate:
                 "timestamp_ms": mined_ts,
             }
 
-            # Simula latenza rete come nel miner CPU
-            network_delay = random.uniform(0, 0.6)
+            delay_min_s = max(0, network_delay_min_ms) / 1000.0
+            delay_max_s = max(delay_min_s, network_delay_max_ms / 1000.0)
+            network_delay = random.uniform(delay_min_s, delay_max_s)
             time.sleep(network_delay)
 
-            r = requests.post(f"{coordinator_url}/submit_block", json=payload, timeout=5).json()
-            elapsed = time.time() - start
+            r = requests.post(
+                f"{coordinator_url}/submit_block",
+                json=payload,
+                timeout=5
+            ).json()
 
-            hashrate = (total_tested / max(total_kernel_time, 1e-9))
+            if r.get("accepted") and r.get("block_hash") and r.get("height") is not None:
+                cached_tpl = {
+                    "height": int(r["height"]) + 1,
+                    "prev_hash": r["block_hash"],
+                    "difficulty_bits": difficulty_bits,
+                }
+            else:
+                cached_tpl = None
+
+            elapsed = time.time() - start
+            hashrate = total_tested / max(total_kernel_time, 1e-9)
             return r, elapsed, nonce, bh, hashrate
 
         start_nonce = (start_nonce + gpu_batch) & 0xFFFFFFFF
+
+        if poll_s > 0:
+            now = time.monotonic()
+            if now >= next_head_check:
+                next_head_check = now + poll_s
+                try:
+                    head = fetch_head(coordinator_url)
+                    head_height = int(head.get("height", height - 1))
+
+                    if head_height - height >= switch_lag_blocks:
+                        latest = fetch_template(coordinator_url)
+                        cached_tpl = latest
+                        height = latest["height"]
+                        prev_hash = latest["prev_hash"]
+                        difficulty_bits = latest["difficulty_bits"]
+                        prefix36 = struct.pack("<I", height) + bytes.fromhex(prev_hash)
+                        start_nonce = random.randint(0, 2**32 - 1)
+                except Exception:
+                    pass
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--coordinator", default="http://127.0.0.1:8000")
     parser.add_argument("--miner-id", default="gpu-miner-1")
-    parser.add_argument("--gpu-batch", type=int, default=2_000_000)
-    parser.add_argument("--template-refresh", type=int, default=1)  # come il tuo
+    parser.add_argument("--gpu-batch", type=int, default=20000)
+    parser.add_argument("--head-poll-ms", type=int, default=200)
+    parser.add_argument("--switch-lag-blocks", type=int, default=2)
+    parser.add_argument("--network-delay-min-ms", type=int, default=0)
+    parser.add_argument("--network-delay-max-ms", type=int, default=600)
     args = parser.parse_args()
 
-    print(f"[{args.miner_id}] coordinator={args.coordinator} device=gpu batch={args.gpu_batch}")
+    print(
+        f"[{args.miner_id}] coordinator={args.coordinator} "
+        f"device=gpu batch={args.gpu_batch} "
+        f"head_poll_ms={args.head_poll_ms} switch_lag={args.switch_lag_blocks}"
+    )
 
     while True:
         res, elapsed, nonce, bh, hashrate = mine_once(
-            args.coordinator, args.miner_id, args.gpu_batch, args.template_refresh
+            args.coordinator,
+            args.miner_id,
+            args.gpu_batch,
+            args.head_poll_ms,
+            args.switch_lag_blocks,
+            args.network_delay_min_ms,
+            args.network_delay_max_ms,
         )
 
         if res.get("accepted"):

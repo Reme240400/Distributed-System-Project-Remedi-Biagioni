@@ -3,56 +3,45 @@ import random
 import requests
 import argparse
 
-# Proof-of-Work helper functions
 from coordinator.pow import header_bytes, sha256_hex, has_leading_zero_bits
 
-TEMPLATE_REFRESH_RATE = 1
-template_counter = 0
 cached_tpl = None
 
 
-def mine_once(coordinator_url: str, miner_id: str, template_refresh_ms: int):
-    """
-    Performs a single mining attempt:
-    - fetches a block template from the coordinator (cached)
-    - searches for a nonce satisfying the Proof-of-Work
-    - (optional) refreshes template every template_refresh_ms while mining
-    - submits the block to the coordinator
+def fetch_template(coordinator_url: str):
+    return requests.get(f"{coordinator_url}/template", timeout=5).json()
 
-    Returns:
-    - coordinator response
-    - mining time
-    - nonce found
-    - block hash
-    """
-    global template_counter, cached_tpl
 
-    # Refresh cached template every TEMPLATE_REFRESH_RATE calls (or first time)
-    if template_counter % TEMPLATE_REFRESH_RATE == 0 or cached_tpl is None:
-        cached_tpl = requests.get(f"{coordinator_url}/template", timeout=5).json()
+def fetch_head(coordinator_url: str):
+    return requests.get(f"{coordinator_url}/head", timeout=3).json()
 
-    template_counter += 1
 
-    # Load current template fields
+def mine_once(
+    coordinator_url: str,
+    miner_id: str,
+    head_poll_ms: int,
+    switch_lag_blocks: int,
+    network_delay_min_ms: int,
+    network_delay_max_ms: int,
+):
+    global cached_tpl
+
+    if cached_tpl is None:
+        cached_tpl = fetch_template(coordinator_url)
+
     height = cached_tpl["height"]
     prev_hash = cached_tpl["prev_hash"]
     difficulty_bits = cached_tpl["difficulty_bits"]
 
-    # The nonce is the only value the miner can freely change.
     nonce = random.randint(0, 2**32 - 1)
-
-    # Start time used to measure mining duration.
     start = time.time()
 
-    # Optional in-loop polling interval
-    refresh_s = (template_refresh_ms / 1000.0) if template_refresh_ms and template_refresh_ms > 0 else 0.0
-    next_check = time.monotonic() + refresh_s if refresh_s > 0 else 0.0
+    poll_s = (head_poll_ms / 1000.0) if head_poll_ms and head_poll_ms > 0 else 0.0
+    next_head_check = time.monotonic() + poll_s if poll_s > 0 else 0.0
 
     while True:
-        # Compute the hash for the current block candidate.
         bh = sha256_hex(header_bytes(height, prev_hash, nonce))
 
-        # Check if the hash satisfies the difficulty constraint.
         if has_leading_zero_bits(bh, difficulty_bits):
             mined_ts = int(time.time() * 1000)
 
@@ -64,74 +53,79 @@ def mine_once(coordinator_url: str, miner_id: str, template_refresh_ms: int):
                 "timestamp_ms": mined_ts,
             }
 
-            # Simulate network latency
-            network_delay = random.uniform(0, 0.6)
+            delay_min_s = max(0, network_delay_min_ms) / 1000.0
+            delay_max_s = max(delay_min_s, network_delay_max_ms / 1000.0)
+            network_delay = random.uniform(delay_min_s, delay_max_s)
             time.sleep(network_delay)
 
-            # Submit the block to the coordinator for validation.
             r = requests.post(
                 f"{coordinator_url}/submit_block",
                 json=payload,
                 timeout=5
             ).json()
 
+            # If accepted, continue locally on top of THIS block
+            if r.get("accepted") and r.get("block_hash") and r.get("height") is not None:
+                cached_tpl = {
+                    "height": int(r["height"]) + 1,
+                    "prev_hash": r["block_hash"],
+                    "difficulty_bits": difficulty_bits,
+                }
+            else:
+                # Rejected => resync next time
+                cached_tpl = None
+
             elapsed = time.time() - start
             return r, elapsed, nonce, bh
 
-        # Try next nonce
         nonce = (nonce + 1) & 0xFFFFFFFF
 
-        # Periodic template check (optional)
-        if refresh_s > 0:
+        if poll_s > 0:
             now = time.monotonic()
-            if now >= next_check:
-                next_check = now + refresh_s
+            if now >= next_head_check:
+                next_head_check = now + poll_s
                 try:
-                    latest = requests.get(f"{coordinator_url}/template", timeout=2).json()
+                    head = fetch_head(coordinator_url)
+                    head_height = int(head.get("height", height - 1))
 
-                    new_height = latest.get("height")
-                    new_prev = latest.get("prev_hash")
-                    new_diff = latest.get("difficulty_bits")
-
-                    # If tip or difficulty changed, restart mining immediately
-                    if (new_height != height) or (new_prev != prev_hash) or (new_diff != difficulty_bits):
-                        cached_tpl = latest  # update global cache
-
-                        height = new_height
-                        prev_hash = new_prev
-                        difficulty_bits = new_diff
-
-                        # restart nonce search on the new tip
+                    # Keep mining locally if behind by 0 or 1 block.
+                    # Switch only if behind by >= switch_lag_blocks.
+                    if head_height - height >= switch_lag_blocks:
+                        latest = fetch_template(coordinator_url)
+                        cached_tpl = latest
+                        height = latest["height"]
+                        prev_hash = latest["prev_hash"]
+                        difficulty_bits = latest["difficulty_bits"]
                         nonce = random.randint(0, 2**32 - 1)
-
                 except Exception:
-                    # If coordinator temporarily unreachable, keep mining current template
                     pass
 
 
 def main():
-    """
-    Miner entry point.
-    Parses command-line arguments and continuously mines blocks.
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--coordinator", default="http://127.0.0.1:8000")
     parser.add_argument("--miner-id", default="cpu-miner-1")
-    parser.add_argument(
-        "--template-refresh-ms",
-        type=int,
-        default=0,
-        help="Polling template every N ms while mining (0=disable)"
-    )
+    parser.add_argument("--head-poll-ms", type=int, default=200)
+    parser.add_argument("--switch-lag-blocks", type=int, default=2)
+    parser.add_argument("--network-delay-min-ms", type=int, default=0)
+    parser.add_argument("--network-delay-max-ms", type=int, default=600)
     args = parser.parse_args()
 
     print(
         f"[{args.miner_id}] coordinator={args.coordinator} "
-        f"device=cpu refresh_ms={args.template_refresh_ms}"
+        f"device=cpu head_poll_ms={args.head_poll_ms} "
+        f"switch_lag={args.switch_lag_blocks}"
     )
 
     while True:
-        res, elapsed, nonce, bh = mine_once(args.coordinator, args.miner_id, args.template_refresh_ms)
+        res, elapsed, nonce, bh = mine_once(
+            args.coordinator,
+            args.miner_id,
+            args.head_poll_ms,
+            args.switch_lag_blocks,
+            args.network_delay_min_ms,
+            args.network_delay_max_ms,
+        )
 
         if res.get("accepted"):
             print(
