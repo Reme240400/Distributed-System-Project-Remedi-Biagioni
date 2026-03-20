@@ -3,13 +3,21 @@ param(
 
   # Miner counts
   [int]$CpuMiners = 0,
-  [int]$GpuMiners = 10,
+  [int]$GpuMiners = 4,
 
   # Mining params
-  [int]$DifficultyBits = 22,
-  [int]$GpuBatch = 20000000,
-  [int]$CpuTemplateRefreshMs = 0,
-  [int]$TemplateRefresh = 1,
+  [int]$DifficultyBits = 23,
+  [int]$GpuBatch = 20000,
+
+  # Branch / sync params
+  [int]$ReorgThreshold = 5,
+  [int]$SwitchLagBlocks = 2,
+  [int]$CpuHeadPollMs = 200,
+  [int]$GpuHeadPollMs = 200,
+
+  # Network delay
+  [int]$NetworkDelayMinMs = 0,
+  [int]$NetworkDelayMaxMs = 600,
 
   # Network params
   [string]$CoordinatorHost = "127.0.0.1",
@@ -23,27 +31,28 @@ Usage: .\run_lab.ps1 [options]
 
 Options:
   -Help                    Show this help message
-  -CpuMiners <int>         Number of CPU miners to start (default: 2)
-  -GpuMiners <int>         Number of GPU miners to start (default: 1)
-  -DifficultyBits <int>    Mining difficulty in bits (default: 18)
-  -GpuBatch <int>          GPU batch size (default: 2000000)
-  -TemplateRefresh <int>   Refresh template every N attempts (default: 1)
-  -CoordinatorHost <str>   Coordinator host (default: 127.0.0.1)
-  -CoordinatorPort <int>   Coordinator port (default: 8000)
-  -DashboardPort <int>     Dashboard port (default: 8050)
+  -CpuMiners <int>         Number of CPU miners
+  -GpuMiners <int>         Number of GPU miners
+  -DifficultyBits <int>    Mining difficulty in bits
+  -GpuBatch <int>          GPU batch size
+  -ReorgThreshold <int>    Coordinator reorg threshold in blocks
+  -SwitchLagBlocks <int>   Miner switch threshold in blocks
+  -CpuHeadPollMs <int>     CPU miner head polling interval in ms
+  -GpuHeadPollMs <int>     GPU miner head polling interval in ms
+  -NetworkDelayMinMs <int> Minimum simulated network delay in ms
+  -NetworkDelayMaxMs <int> Maximum simulated network delay in ms
+  -CoordinatorHost <str>   Coordinator host
+  -CoordinatorPort <int>   Coordinator port
+  -DashboardPort <int>     Dashboard port
 "@
   exit 0
 }
 
 $ErrorActionPreference = "Stop"
 
-# Move to repo root (script folder -> repo root)
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
-# ---------------------------
-# Dependency check/install
-# ---------------------------
 try {
   $needsInstall = python -m pip install -r requirements.txt --dry-run 2>&1 | Select-String "Would install"
   if ($needsInstall) {
@@ -66,10 +75,15 @@ Write-Host "CPU Miners: $CpuMiners"
 Write-Host "GPU Miners: $GpuMiners"
 Write-Host "DifficultyBits: $DifficultyBits"
 Write-Host "GPU Batch: $GpuBatch"
+Write-Host "Reorg Threshold: $ReorgThreshold"
+Write-Host "Switch Lag Blocks: $SwitchLagBlocks"
+Write-Host "CPU Head Poll: $CpuHeadPollMs ms"
+Write-Host "GPU Head Poll: $GpuHeadPollMs ms"
+Write-Host "Network Delay Min: $NetworkDelayMinMs ms"
+Write-Host "Network Delay Max: $NetworkDelayMaxMs ms"
 Write-Host "Dashboard: http://$CoordinatorHost`:$DashboardPort"
 Write-Host ""
 
-# Track spawned processes
 $script:childProcesses = @()
 
 function Start-ChildPwsh($cmd) {
@@ -78,44 +92,36 @@ function Start-ChildPwsh($cmd) {
   return $proc
 }
 
-# ---------------------------
 # Coordinator
-# ---------------------------
 $coordCmd = @"
 `$env:DIFFICULTY_BITS='$DifficultyBits';
+`$env:REORG_THRESHOLD='$ReorgThreshold';
 python -m uvicorn coordinator.app:app --host $CoordinatorHost --port $CoordinatorPort
 "@
 Start-ChildPwsh $coordCmd | Out-Null
 Start-Sleep -Seconds 1
 
-# ---------------------------
-# CPU Miners
-# ---------------------------
+# CPU miners
 for ($i = 1; $i -le $CpuMiners; $i++) {
   $minerId = "cpu-$i"
   $minerCmd = @"
-python -m miner.miner --coordinator $CoordinatorUrl --miner-id $minerId --template-refresh-ms $CpuTemplateRefreshMs
+python -m miner.miner --coordinator $CoordinatorUrl --miner-id $minerId --head-poll-ms $CpuHeadPollMs --switch-lag-blocks $SwitchLagBlocks --network-delay-min-ms $NetworkDelayMinMs --network-delay-max-ms $NetworkDelayMaxMs
 "@
-
   Start-ChildPwsh $minerCmd | Out-Null
   Start-Sleep -Milliseconds 200
 }
 
-# ---------------------------
-# GPU Miners
-# ---------------------------
+# GPU miners
 for ($i = 1; $i -le $GpuMiners; $i++) {
   $minerId = "gpu-$i"
   $gpuCmd = @"
-python -m miner.gpu_miner --coordinator $CoordinatorUrl --miner-id $minerId --gpu-batch $GpuBatch --template-refresh $TemplateRefresh
+python -m miner.gpu_miner --coordinator $CoordinatorUrl --miner-id $minerId --gpu-batch $GpuBatch --head-poll-ms $GpuHeadPollMs --switch-lag-blocks $SwitchLagBlocks --network-delay-min-ms $NetworkDelayMinMs --network-delay-max-ms $NetworkDelayMaxMs
 "@
   Start-ChildPwsh $gpuCmd | Out-Null
   Start-Sleep -Milliseconds 200
 }
 
-# ---------------------------
 # Dashboard
-# ---------------------------
 $dashCmd = @"
 `$env:COORDINATOR_URL='$CoordinatorUrl';
 `$env:DASHBOARD_PORT='$DashboardPort';

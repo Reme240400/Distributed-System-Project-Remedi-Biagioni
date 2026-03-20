@@ -526,23 +526,55 @@ def refresh(_n: int):
             ts = b.get('accepted_timestamp_ms', 0)
             node_text.append(f"H={x}<br>Miner={miner}<br>Hash={bh[:8]}<br>TS={ts}")
             
-        edge_x = []
-        edge_y = []
+        main_edge_x = []
+        main_edge_y = []
+
+        stale_edge_x = []
+        stale_edge_y = []
+
+        block_by_hash = {b["block_hash"]: b for b in all_blocks_tree}
+
         for b in all_blocks_tree:
-            bh = b['block_hash']
-            ph = b['prev_hash']
-            if bh in layout_map and ph in layout_map:
-                x0, y0 = layout_map[ph]
-                x1, y1 = layout_map[bh]
-                edge_x.extend([x0, x1, None])
-                edge_y.extend([y0, y1, None])
+            bh = b["block_hash"]
+            ph = b["prev_hash"]
+
+            if bh not in layout_map or ph not in layout_map:
+                continue
+
+            x0, y0 = layout_map[ph]
+            x1, y1 = layout_map[bh]
+
+            parent = block_by_hash.get(ph)
+
+            is_main_edge = (
+                b.get("on_main_chain", False)
+                and parent is not None
+                and parent.get("on_main_chain", False)
+            )
+
+            if is_main_edge:
+                main_edge_x.extend([x0, x1, None])
+                main_edge_y.extend([y0, y1, None])
+            else:
+                stale_edge_x.extend([x0, x1, None])
+                stale_edge_y.extend([y0, y1, None])
 
         fig_tree.add_trace(go.Scatter(
-            x=edge_x, y=edge_y,
-            mode='lines',
-            line=dict(color='#888', width=1),
-            hoverinfo='none',
-            name='link'
+            x=stale_edge_x,
+            y=stale_edge_y,
+            mode="lines",
+            line=dict(color="red", width=1),
+            hoverinfo="none",
+            name="stale-link"
+        ))
+
+        fig_tree.add_trace(go.Scatter(
+            x=main_edge_x,
+            y=main_edge_y,
+            mode="lines",
+            line=dict(color="green", width=2),
+            hoverinfo="none",
+            name="main-link"
         ))
         
         fig_tree.add_trace(go.Scatter(
