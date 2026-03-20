@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from typing import List
 from .models import BlockTemplate, BlockSubmission, BlockAccepted, Metrics, ChainView, ChainBlock
 from .chain import Chain
@@ -9,23 +9,16 @@ import os
 logger = logging.getLogger("coordinator")
 logger.setLevel(logging.INFO)
 
-# FastAPI app exposing coordinator endpoints used by miners and the dashboard.
 app = FastAPI(title="Distributed Mining Monitor - Coordinator", version="0.1.0")
 
-# Global in-memory chain for the MVP.
-# Note: This makes the coordinator the single source of truth for the chain state.
 DIFFICULTY_BITS = int(os.getenv("DIFFICULTY_BITS", "18"))
-chain = Chain(difficulty_bits=DIFFICULTY_BITS)
+REORG_THRESHOLD = int(os.getenv("REORG_THRESHOLD", "2"))
+
+chain = Chain(difficulty_bits=DIFFICULTY_BITS, reorg_threshold=REORG_THRESHOLD)
 
 
 @app.get("/template", response_model=BlockTemplate)
 def get_template() -> BlockTemplate:
-    """
-    Return the current block template to miners.
-
-    Miners should try to find a nonce such that:
-        hash(height | prev_hash | nonce) < target(difficulty)
-    """
     tip = chain.best_tip()
     return BlockTemplate(
         height=tip.height + 1,
@@ -34,12 +27,18 @@ def get_template() -> BlockTemplate:
     )
 
 
+@app.get("/head")
+def get_head():
+    tip = chain.best_tip()
+    return {
+        "height": tip.height,
+        "block_hash": tip.block_hash,
+        "difficulty_bits": chain.difficulty_bits,
+    }
+
+
 @app.post("/submit_block", response_model=BlockAccepted)
 def submit_block(sub: BlockSubmission) -> BlockAccepted:
-    """
-    Validate a miner block proposal and append it to the chain if valid.
-    Logs both accepted and rejected submissions for observability.
-    """
     ok, reason, block = chain.validate_and_add(
         height=sub.height,
         prev_hash=sub.prev_hash,
@@ -68,15 +67,11 @@ def submit_block(sub: BlockSubmission) -> BlockAccepted:
     )
 
 
-
 @app.get("/metrics", response_model=Metrics)
 def get_metrics() -> Metrics:
-    """
-    Expose runtime metrics for experiments and monitoring.
-    """
     return Metrics(
         height=chain.height(),
-        blocks_accepted=len(chain.blocks_by_hash) - 1,  # exclude genesis
+        blocks_accepted=len(chain.blocks_by_hash) - 1,
         avg_block_time_ms=chain.avg_block_time_ms(),
         last_block_time_ms=chain.last_block_time_ms(),
         accepted_by_miner=chain.accepted_by_miner,
@@ -91,15 +86,8 @@ def get_metrics() -> Metrics:
 
 @app.get("/chain", response_model=ChainView)
 def get_chain(limit: int = 20) -> ChainView:
-    """
-    Return a snapshot of the last N blocks.
-    This endpoint is meant for humans (inspection) and for dashboards.
-    """
     blocks = chain.get_main_chain_blocks(limit=limit)
-    view_blocks = [
-        ChainBlock(**b.__dict__)
-        for b in blocks
-    ]
+    view_blocks = [ChainBlock(**b.__dict__) for b in blocks]
 
     return ChainView(
         tip_height=chain.height(),
@@ -110,10 +98,6 @@ def get_chain(limit: int = 20) -> ChainView:
 
 @app.get("/all-blocks", response_model=List[ChainBlock])
 def get_all_blocks() -> List[ChainBlock]:
-    """
-    Return ALL blocks (including orphans/stale) known to the coordinator.
-    Useful for visualizing the block tree.
-    """
     blocks = chain.get_all_blocks()
     out = []
     for b in blocks:
@@ -122,16 +106,12 @@ def get_all_blocks() -> List[ChainBlock]:
         out.append(cb)
     return out
 
+
 @app.get("/blocks", response_model=ChainView)
 def get_blocks(limit: int = 20) -> ChainView:
-    """
-    Recent blocks across all branches (debug/visualiz
-    """
     blocks = chain.get_recent_blocks(limit=limit)
-    view_blocks = [
-        ChainBlock(**b.__dict__)
-        for b in blocks
-    ]
+    view_blocks = [ChainBlock(**b.__dict__) for b in blocks]
+
     return ChainView(
         tip_height=chain.height(),
         difficulty_bits=chain.difficulty_bits,
