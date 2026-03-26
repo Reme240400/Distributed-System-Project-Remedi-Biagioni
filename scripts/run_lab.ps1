@@ -3,15 +3,16 @@ param(
 
   # Miner counts
   [int]$CpuMiners = 0,
-  [int]$GpuMiners = 4,
+  [int]$GpuMiners = 3,
 
   # Mining params
-  [int]$DifficultyBits = 23,
+  [int]$DifficultyBits = 22,
   [int]$GpuBatch = 20000,
 
   # Branch / sync params
-  [int]$ReorgThreshold = 5,
-  [int]$SwitchLagBlocks = 2,
+  [int]$DifficultyAdjustmentInterval = 100,
+  [int]$ReorgThreshold = 3,    #Quando il coordinator fa reorg
+  [int]$SwitchLagBlocks = 3,   #Quanto scarto può avere il miner prima che chiede il template nuovo
   [int]$CpuHeadPollMs = 200,
   [int]$GpuHeadPollMs = 200,
 
@@ -81,6 +82,7 @@ Write-Host "CPU Head Poll: $CpuHeadPollMs ms"
 Write-Host "GPU Head Poll: $GpuHeadPollMs ms"
 Write-Host "Network Delay Min: $NetworkDelayMinMs ms"
 Write-Host "Network Delay Max: $NetworkDelayMaxMs ms"
+Write-Host "Difficulty Adjustment Interval: $DifficultyAdjustmentInterval"
 Write-Host "Dashboard: http://$CoordinatorHost`:$DashboardPort"
 Write-Host ""
 
@@ -96,6 +98,7 @@ function Start-ChildPwsh($cmd) {
 $coordCmd = @"
 `$env:DIFFICULTY_BITS='$DifficultyBits';
 `$env:REORG_THRESHOLD='$ReorgThreshold';
+`$env:DIFFICULTY_ADJUSTMENT_INTERVAL='$DifficultyAdjustmentInterval';
 python -m uvicorn coordinator.app:app --host $CoordinatorHost --port $CoordinatorPort
 "@
 Start-ChildPwsh $coordCmd | Out-Null

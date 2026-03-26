@@ -13,17 +13,23 @@ app = FastAPI(title="Distributed Mining Monitor - Coordinator", version="0.1.0")
 
 DIFFICULTY_BITS = int(os.getenv("DIFFICULTY_BITS", "18"))
 REORG_THRESHOLD = int(os.getenv("REORG_THRESHOLD", "2"))
+DIFFICULTY_ADJUSTMENT_INTERVAL = int(os.getenv("DIFFICULTY_ADJUSTMENT_INTERVAL", "100"))
 
-chain = Chain(difficulty_bits=DIFFICULTY_BITS, reorg_threshold=REORG_THRESHOLD)
+chain = Chain(
+    difficulty_bits=DIFFICULTY_BITS,
+    reorg_threshold=REORG_THRESHOLD,
+    difficulty_adjustment_interval=DIFFICULTY_ADJUSTMENT_INTERVAL,
+)
 
 
 @app.get("/template", response_model=BlockTemplate)
 def get_template() -> BlockTemplate:
     tip = chain.best_tip()
+    next_height = tip.height + 1
     return BlockTemplate(
-        height=tip.height + 1,
+        height=next_height,
         prev_hash=tip.block_hash,
-        difficulty_bits=chain.difficulty_bits,
+        difficulty_bits=chain.difficulty_for_height(next_height),
     )
 
 
@@ -33,7 +39,8 @@ def get_head():
     return {
         "height": tip.height,
         "block_hash": tip.block_hash,
-        "difficulty_bits": chain.difficulty_bits,
+        "difficulty_bits": chain.difficulty_for_height(tip.height + 1),
+        "blocks_to_next_adjustment": chain.blocks_to_next_adjustment(),
     }
 
 
@@ -64,6 +71,7 @@ def submit_block(sub: BlockSubmission) -> BlockAccepted:
         reason=reason,
         block_hash=block.block_hash if block else None,
         height=block.height if block else None,
+        next_difficulty_bits=chain.difficulty_for_height(block.height + 1) if block else None,
     )
 
 
@@ -74,6 +82,8 @@ def get_metrics() -> Metrics:
         blocks_accepted=len(chain.blocks_by_hash) - 1,
         avg_block_time_ms=chain.avg_block_time_ms(),
         last_block_time_ms=chain.last_block_time_ms(),
+        current_difficulty_bits=chain.current_difficulty_bits(),
+        blocks_to_next_adjustment=chain.blocks_to_next_adjustment(),
         accepted_by_miner=chain.accepted_by_miner,
         rejected_total=chain.rejected_total,
         rejected_by_reason=chain.rejected_by_reason,
@@ -91,7 +101,7 @@ def get_chain(limit: int = 20) -> ChainView:
 
     return ChainView(
         tip_height=chain.height(),
-        difficulty_bits=chain.difficulty_bits,
+        difficulty_bits=chain.current_difficulty_bits(),
         blocks=view_blocks,
     )
 
@@ -114,6 +124,6 @@ def get_blocks(limit: int = 20) -> ChainView:
 
     return ChainView(
         tip_height=chain.height(),
-        difficulty_bits=chain.difficulty_bits,
+        difficulty_bits=chain.current_difficulty_bits(),
         blocks=view_blocks,
     )

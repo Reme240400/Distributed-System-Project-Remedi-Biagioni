@@ -17,31 +17,24 @@ class Block:
 
 
 class Chain:
-    """
-    In-memory chain manager with fork support.
-
-    Canonical branch policy:
-    - first seen wins for same-height competing blocks
-    - switch to a competing branch only when it is ahead by at least
-      `reorg_threshold` blocks
-    """
-
-    def __init__(self, difficulty_bits: int = 20, reorg_threshold: int = 2):
-        self.difficulty_bits = difficulty_bits
+    def __init__(
+        self,
+        difficulty_bits: int = 20,
+        reorg_threshold: int = 2,
+        difficulty_adjustment_interval: int = 100,
+    ):
+        self.base_difficulty_bits = difficulty_bits
         self.reorg_threshold = reorg_threshold
+        self.difficulty_adjustment_interval = max(1, difficulty_adjustment_interval)
 
-        # DAG
         self.blocks_by_hash: Dict[str, Block] = {}
         self.children_by_hash: Dict[str, List[Block]] = {}
 
-        # Branches
         self.tips: Set[str] = set()
         self.best_tip_hash: str = ""
 
-        # Canonical chain view
         self.main_chain_hashes: Set[str] = set()
 
-        # Metrics
         self.accepted_by_miner: Dict[str, int] = {}
         self.rejected_total = 0
         self.rejected_by_reason: Dict[str, int] = {}
@@ -50,6 +43,35 @@ class Chain:
         self.start_time_ms = int(time.time() * 1000)
 
         self._genesis()
+
+    def difficulty_for_height(self, height: int) -> int:
+        """
+        Increase difficulty by 1 bit every `difficulty_adjustment_interval` blocks.
+        Example with interval=100 and base=23:
+        heights 1..99   -> 23
+        heights 100..199 -> 24
+        heights 200..299 -> 25
+        """
+        if height <= 0:
+            return self.base_difficulty_bits
+
+        increments = height // self.difficulty_adjustment_interval
+        return self.base_difficulty_bits + increments
+
+    def current_difficulty_bits(self) -> int:
+        """
+        Difficulty for the NEXT block template.
+        """
+        return self.difficulty_for_height(self.height() + 1)
+
+    def blocks_to_next_adjustment(self) -> int:
+        """
+        How many accepted canonical blocks remain before the next difficulty increase.
+        """
+        h = self.height()
+        interval = self.difficulty_adjustment_interval
+        next_boundary = ((h // interval) + 1) * interval
+        return next_boundary - h
 
     def _genesis(self) -> None:
         now = int(time.time() * 1000)
@@ -143,9 +165,11 @@ class Chain:
             self._count_reject(reason)
             return False, reason, None
 
+        expected_difficulty = self.difficulty_for_height(height)
+
         bh = sha256_hex(header_bytes(height, prev_hash, nonce))
-        if not has_leading_zero_bits(bh, self.difficulty_bits):
-            reason = "invalid PoW for current difficulty"
+        if not has_leading_zero_bits(bh, expected_difficulty):
+            reason = f"invalid PoW for difficulty {expected_difficulty}"
             self._count_reject(reason)
             return False, reason, None
 
@@ -208,12 +232,10 @@ class Chain:
         current_best = self.blocks_by_hash[current_best_hash]
         new_block = self.blocks_by_hash[new_block_hash]
 
-        # If it extends canonical tip, follow it immediately
         if new_block.prev_hash == current_best_hash:
             self.best_tip_hash = new_block_hash
             return
 
-        # Otherwise switch only if competing branch is ahead by threshold
         if new_block.height >= current_best.height + self.reorg_threshold:
             self.best_tip_hash = new_block_hash
             return
