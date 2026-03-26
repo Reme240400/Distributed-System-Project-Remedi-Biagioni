@@ -2,7 +2,7 @@ param(
   [switch]$Help,
 
   # Miner counts
-  [int]$CpuMiners = 0,
+  [int]$CpuMiners = 1,
   [int]$GpuMiners = 3,
 
   # Mining params
@@ -108,7 +108,7 @@ Start-Sleep -Seconds 1
 for ($i = 1; $i -le $CpuMiners; $i++) {
   $minerId = "cpu-$i"
   $minerCmd = @"
-python -m miner.miner --coordinator $CoordinatorUrl --miner-id $minerId --head-poll-ms $CpuHeadPollMs --switch-lag-blocks $SwitchLagBlocks --network-delay-min-ms $NetworkDelayMinMs --network-delay-max-ms $NetworkDelayMaxMs
+python -m miner.cpu_miner --coordinator $CoordinatorUrl --miner-id $minerId --head-poll-ms $CpuHeadPollMs --switch-lag-blocks $SwitchLagBlocks --network-delay-min-ms $NetworkDelayMinMs --network-delay-max-ms $NetworkDelayMaxMs
 "@
   Start-ChildPwsh $minerCmd | Out-Null
   Start-Sleep -Milliseconds 200

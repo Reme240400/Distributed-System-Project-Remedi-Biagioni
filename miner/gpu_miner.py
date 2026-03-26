@@ -242,7 +242,7 @@ def mine_once(
                 cached_tpl = {
                     "height": int(r["height"]) + 1,
                     "prev_hash": r["block_hash"],
-                    "difficulty_bits": difficulty_bits,
+                    "difficulty_bits": int(r.get("next_difficulty_bits", difficulty_bits)),
                 }
             else:
                 cached_tpl = None

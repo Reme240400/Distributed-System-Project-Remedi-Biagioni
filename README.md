@@ -1,17 +1,6 @@
 # Distributed-System-Project-Remedi-Biagioni
-creare venv:
 
-su windows lanciare
+Andare nel file run_lab.ps1 e settare le variabili
 
-python -m venv .venv
-
-.venv\\Scripts\\activate
-
-installare dipendenze:
-
-pip install -r requirements.txt
-
-run coordinator
-
-run miner
-
+Lanciare il file
+.\scripts\run_lab.ps1
