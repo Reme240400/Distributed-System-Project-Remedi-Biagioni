@@ -31,23 +31,36 @@ DASH_START_S = time.time()
 # UI helpers
 # ---------------------------
 
-def _card_style() -> Dict[str, Any]:
+def _card_style(alert: bool = False) -> Dict[str, Any]:
+    if alert:
+        return {
+            "flex": "1 1 0",
+            "minWidth": "0",
+            "borderLeft": "4px solid #f85149",
+            "borderTop": "1px solid #30363d",
+            "borderRight": "1px solid #30363d",
+            "borderBottom": "1px solid #30363d",
+            "borderRadius": "10px",
+            "padding": "10px 12px",
+            "backgroundColor": "#1f1115",
+        }
     return {
-        "flex": "1 1 220px",
-        "minWidth": "220px",
-        "border": "1px solid #ddd",
+        "flex": "1 1 0",
+        "minWidth": "0",
+        "border": "1px solid #30363d",
         "borderRadius": "10px",
         "padding": "10px 12px",
-        "backgroundColor": "#fafafa",
+        "backgroundColor": "#161b22",
     }
 
 
-def make_card(title: str, value: str, subtitle: str = "") -> html.Div:
+def make_card(title: str, value: str, subtitle: str = "", alert: bool = False) -> html.Div:
     return html.Div(
+        style=_card_style(alert=alert),
         children=[
-            html.Div(title, style={"fontSize": "12px", "color": "#555"}),
-            html.Div(value, style={"fontSize": "24px", "fontWeight": "bold"}),
-            html.Div(subtitle, style={"fontSize": "12px", "color": "#777"}) if subtitle else html.Div(),
+            html.Div(title, style={"fontSize": "12px", "color": "#8b949e"}),
+            html.Div(value, style={"fontSize": "24px", "fontWeight": "bold", "color": "#e6edf3"}),
+            html.Div(subtitle, style={"fontSize": "12px", "color": "#6e7681"}) if subtitle else html.Div(),
         ]
     )
 
@@ -110,29 +123,73 @@ def compute_block_times(chain_blocks: List[Dict[str, Any]]) -> List[Tuple[int, i
 app = Dash(__name__)
 app.title = "Distributed Mining Monitor - Dashboard"
 
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+<head>
+{%metas%}
+<title>{%title%}</title>
+{%favicon%}
+{%css%}
+<style>
+  html, body {
+    background-color: #0d1117 !important;
+    margin: 0;
+    padding: 0;
+  }
+</style>
+</head>
+<body>
+{%app_entry%}
+<footer>{%config%}{%scripts%}{%renderer%}</footer>
+</body>
+</html>
+'''
+
 app.layout = html.Div(
-    style={"fontFamily": "Arial", "maxWidth": "1200px", "margin": "0 auto", "padding": "16px"},
+    style={
+        "fontFamily": "Arial",
+        "width": "95%",
+        "boxSizing": "border-box",
+        "margin": "0 auto",
+        "padding": "16px 24px",
+        "backgroundColor": "#0d1117",
+        "color": "#e6edf3",
+        "minHeight": "100vh",
+    },
     children=[
-        html.H2("Distributed Mining Monitor", style={"marginBottom": "4px"}),
+        html.Div(
+            style={"display": "flex", "alignItems": "center", "gap": "16px", "marginBottom": "4px"},
+            children=[
+                html.H2("Distributed Mining Monitor", style={"marginBottom": "0", "color": "#e6edf3"}),
+                html.Div(id="conn-badge"),
+            ],
+        ),
         html.Div(
             children=[
-                html.Div(f"Coordinator: {COORDINATOR_URL}", style={"color": "#555"}),
-                html.Div(f"Auto-refresh: {REFRESH_MS} ms", style={"color": "#555"}),
+                html.Div(f"Coordinator: {COORDINATOR_URL}", style={"color": "#8b949e"}),
+                html.Div(f"Auto-refresh: {REFRESH_MS} ms", style={"color": "#8b949e"}),
             ],
             style={"marginBottom": "12px"},
         ),
 
         dcc.Interval(id="tick", interval=REFRESH_MS, n_intervals=0),
 
-        # Summary cards
+        # Summary cards — row 1 (5 cards)
         html.Div(
-            style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "12px"},
+            style={"display": "flex", "gap": "8px", "flexWrap": "nowrap", "marginBottom": "8px"},
             children=[
                 html.Div(id="card-height", style=_card_style()),
                 html.Div(id="card-difficulty", style=_card_style()),
                 html.Div(id="card-next-adjustment", style=_card_style()),
                 html.Div(id="card-rejected", style=_card_style()),
                 html.Div(id="card-reject-ratio", style=_card_style()),
+            ],
+        ),
+        # Summary cards — row 2 (4 cards)
+        html.Div(
+            style={"display": "flex", "gap": "8px", "flexWrap": "nowrap", "marginBottom": "12px"},
+            children=[
                 html.Div(id="card-uptime", style=_card_style()),
                 html.Div(id="card-forks", style=_card_style()),
                 html.Div(id="card-orphans", style=_card_style()),
@@ -142,10 +199,16 @@ app.layout = html.Div(
 
         # DAG
         html.Div(
-            style={"marginBottom": "12px", "padding": "12px", "border": "1px solid #eee", "borderRadius": "8px"},
+            style={
+                "marginBottom": "12px",
+                "padding": "12px",
+                "border": "1px solid #30363d",
+                "borderRadius": "8px",
+                "backgroundColor": "#161b22",
+            },
             children=[
-                html.H4("Block Tree (All Blocks)", style={"marginBottom": "4px"}),
-                dcc.Graph(id="graph-block-tree", config={"displayModeBar": True}, style={"height": "420px"}),
+                html.H4("Block Tree (All Blocks)", style={"marginBottom": "4px", "color": "#e6edf3"}),
+                dcc.Graph(id="graph-block-tree", config={"displayModeBar": True}, style={"height": "420px", "width": "100%"}),
             ],
         ),
 
@@ -154,31 +217,51 @@ app.layout = html.Div(
             style={"display": "flex", "gap": "12px", "flexWrap": "wrap"},
             children=[
                 html.Div(
-                    style={"flex": "1 1 580px", "minWidth": "360px"},
+                    style={
+                        "flex": "1 1 580px",
+                        "minWidth": "360px",
+                        "backgroundColor": "#161b22",
+                        "border": "1px solid #30363d",
+                        "borderRadius": "8px",
+                        "padding": "12px",
+                    },
                     children=[
-                        html.H4("Block time (main chain)", style={"marginBottom": "4px"}),
-                        dcc.Graph(id="graph-block-time", config={"displayModeBar": False}, style={"height": "360px"}),
+                        html.H4("Block time (main chain)", style={"marginBottom": "4px", "color": "#e6edf3"}),
+                        dcc.Graph(id="graph-block-time", config={"displayModeBar": False}, style={"height": "360px", "width": "100%"}),
                     ],
                 ),
                 html.Div(
-                    style={"flex": "1 1 580px", "minWidth": "360px"},
+                    style={
+                        "flex": "1 1 580px",
+                        "minWidth": "360px",
+                        "backgroundColor": "#161b22",
+                        "border": "1px solid #30363d",
+                        "borderRadius": "8px",
+                        "padding": "12px",
+                    },
                     children=[
-                        html.H4("Accepted blocks by miner", style={"marginBottom": "4px"}),
-                        dcc.Graph(id="graph-accepted-by-miner", config={"displayModeBar": False}, style={"height": "360px"}),
+                        html.H4("Accepted blocks by miner", style={"marginBottom": "4px", "color": "#e6edf3"}),
+                        dcc.Graph(id="graph-accepted-by-miner", config={"displayModeBar": False}, style={"height": "360px", "width": "100%"}),
                     ],
                 ),
             ],
         ),
 
         html.Div(
-            style={"marginTop": "12px"},
+            style={
+                "marginTop": "12px",
+                "backgroundColor": "#161b22",
+                "border": "1px solid #30363d",
+                "borderRadius": "8px",
+                "padding": "12px",
+            },
             children=[
-                html.H4("Reject rate over time", style={"marginBottom": "4px"}),
-                dcc.Graph(id="graph-reject-rate", config={"displayModeBar": False}, style={"height": "360px"}),
+                html.H4("Reject rate over time", style={"marginBottom": "4px", "color": "#e6edf3"}),
+                dcc.Graph(id="graph-reject-rate", config={"displayModeBar": False}, style={"height": "360px", "width": "100%"}),
             ],
         ),
 
-        html.H4("Last blocks", style={"marginTop": "16px", "marginBottom": "6px"}),
+        html.H4("Last blocks", style={"marginTop": "16px", "marginBottom": "6px", "color": "#e6edf3"}),
 
         dash_table.DataTable(
             id="table-blocks",
@@ -195,15 +278,38 @@ app.layout = html.Div(
             page_size=15,
             style_table={"overflowX": "auto"},
             style_cell={
-                "fontFamily": "Arial",
+                "fontFamily": "monospace",
                 "fontSize": "13px",
                 "padding": "6px",
                 "whiteSpace": "nowrap",
+                "backgroundColor": "#161b22",
+                "color": "#e6edf3",
+                "border": "1px solid #21262d",
             },
-            style_header={"fontWeight": "bold"},
+            style_header={
+                "fontWeight": "bold",
+                "backgroundColor": "#21262d",
+                "color": "#e6edf3",
+                "border": "1px solid #30363d",
+            },
+            style_data_conditional=[
+                {
+                    "if": {"filter_query": '{on_main_chain} = "no"'},
+                    "backgroundColor": "#1f1115",
+                    "color": "#f85149",
+                }
+            ],
         ),
 
-        html.Div(id="status-line", style={"marginTop": "10px", "color": "#777"}),
+        html.Div(
+            id="status-line",
+            style={
+                "marginTop": "10px",
+                "color": "#8b949e",
+                "fontSize": "12px",
+                "fontFamily": "monospace",
+            },
+        ),
     ],
 )
 
@@ -228,15 +334,41 @@ app.layout = html.Div(
     Output("graph-block-tree", "figure"),
     Output("table-blocks", "data"),
     Output("status-line", "children"),
+    Output("conn-badge", "children"),
     Input("tick", "n_intervals"),
 )
 def refresh(_n: int):
     metrics = fetch_metrics()
     blocks = fetch_blocks(CHAIN_LIMIT)
 
+    _dark_layout = dict(
+        paper_bgcolor="#161b22",
+        plot_bgcolor="#1a1f29",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="#21262d"),
+        yaxis=dict(gridcolor="#21262d"),
+    )
+
     if not metrics or not blocks:
         empty = go.Figure()
-        empty.update_layout(height=360, autosize=False, margin=dict(l=30, r=10, t=10, b=30))
+        empty.update_layout(
+            height=360,
+            autosize=True,
+            margin=dict(l=30, r=10, t=10, b=30),
+            **_dark_layout,
+        )
+
+        badge_offline = html.Span(
+            "● OFFLINE",
+            style={
+                "fontSize": "12px",
+                "fontWeight": "bold",
+                "color": "#f85149",
+                "backgroundColor": "#21262d",
+                "padding": "3px 10px",
+                "borderRadius": "12px",
+            },
+        )
 
         return (
             make_card("Chain height", "—", "Coordinator not reachable"),
@@ -254,7 +386,20 @@ def refresh(_n: int):
             empty,
             [],
             f"Waiting for coordinator at {COORDINATOR_URL} ...",
+            badge_offline,
         )
+
+    badge_live = html.Span(
+        "● LIVE",
+        style={
+            "fontSize": "12px",
+            "fontWeight": "bold",
+            "color": "#3fb950",
+            "backgroundColor": "#21262d",
+            "padding": "3px 10px",
+            "borderRadius": "12px",
+        },
+    )
 
     all_blocks_tree = fetch_all_blocks()
 
@@ -269,18 +414,18 @@ def refresh(_n: int):
     current_difficulty_bits = int(metrics.get("current_difficulty_bits", 0))
     blocks_to_next_adjustment = int(metrics.get("blocks_to_next_adjustment", 0))
 
+    total_denom = rejected_total + blocks_accepted
+    total_ratio = (rejected_total / total_denom) if total_denom > 0 else 0.0
+
     card_height = make_card("Chain height", str(height), "Tip height")
     card_difficulty = make_card("Current difficulty", str(current_difficulty_bits), "Leading zero bits")
     card_next_adjustment = make_card("Next difficulty step", str(blocks_to_next_adjustment), "Blocks remaining")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
-    card_forks = make_card("Forks detected", str(forks_detected), "Points with multiple children")
-    card_orphans = make_card("Orphan blocks", str(orphan_count), "Blocks not in main chain")
-    card_reorgs = make_card("Reorgs", str(reorg_count), "Chain reorganizations")
-
-    total_denom = rejected_total + blocks_accepted
-    total_ratio = (rejected_total / total_denom) if total_denom > 0 else 0.0
-    card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)")
+    card_forks = make_card("Forks detected", str(forks_detected), "Points with multiple children", alert=forks_detected > 0)
+    card_orphans = make_card("Orphan blocks", str(orphan_count), "Blocks not in main chain", alert=orphan_count > 0)
+    card_reorgs = make_card("Reorgs", str(reorg_count), "Chain reorganizations", alert=reorg_count > 0)
+    card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)", alert=total_ratio > 0.05)
 
     # Time series
     t_rel = time.time() - DASH_START_S
@@ -308,14 +453,28 @@ def refresh(_n: int):
     if bt:
         x = [h for (h, _dt) in bt]
         y = [_dt / 1000.0 for (_h, _dt) in bt]
-        fig_block_time.add_trace(go.Scatter(x=x, y=y, mode="lines+markers", name="block_time_s"))
+        fig_block_time.add_trace(go.Scatter(
+            x=x,
+            y=y,
+            mode="lines+markers",
+            name="block_time_s",
+            line=dict(color="#58a6ff", width=2),
+            marker=dict(color="#58a6ff", size=5),
+            fill="tozeroy",
+            fillcolor="rgba(88,166,255,0.10)",
+        ))
 
     fig_block_time.update_layout(
         height=360,
-        autosize=False,
+        autosize=True,
         margin=dict(l=30, r=10, t=10, b=30),
         xaxis_title="Block height (main chain)",
         yaxis_title="Block time (seconds)",
+        paper_bgcolor="#161b22",
+        plot_bgcolor="#1a1f29",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="#21262d"),
+        yaxis=dict(gridcolor="#21262d"),
     )
 
     # ---------------------------
@@ -346,25 +505,32 @@ def refresh(_n: int):
     orphan_vals = [miner_orphan_counts[m] for m in sorted_miners]
 
     fig_accepted = go.Figure()
-    fig_accepted.add_trace(go.Bar(x=sorted_miners, y=main_vals, name="Main Chain", marker_color="green"))
-    fig_accepted.add_trace(go.Bar(x=sorted_miners, y=orphan_vals, name="Stale/Orphan", marker_color="red"))
+    fig_accepted.add_trace(go.Bar(x=sorted_miners, y=main_vals, name="Main Chain", marker_color="#3fb950"))
+    fig_accepted.add_trace(go.Bar(x=sorted_miners, y=orphan_vals, name="Stale/Orphan", marker_color="#f85149"))
 
     fig_accepted.update_layout(
         height=360,
-        autosize=False,
+        autosize=True,
         margin=dict(l=30, r=10, t=10, b=50),
         xaxis_title="Miners",
         yaxis_title="Accepted blocks",
         barmode="group",
         bargap=0.2,
         bargroupgap=0.0,
+        paper_bgcolor="#161b22",
+        plot_bgcolor="#1a1f29",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="#21262d"),
+        yaxis=dict(gridcolor="#21262d"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
-        )
+            x=1,
+            bgcolor="#21262d",
+            font=dict(color="#e6edf3"),
+        ),
     )
 
     # ---------------------------
@@ -384,14 +550,28 @@ def refresh(_n: int):
 
     fig_reject_rate = go.Figure()
     if rate_x:
-        fig_reject_rate.add_trace(go.Scatter(x=rate_x, y=rate_y, mode="lines+markers", name="reject/s"))
+        fig_reject_rate.add_trace(go.Scatter(
+            x=rate_x,
+            y=rate_y,
+            mode="lines+markers",
+            name="reject/s",
+            line=dict(color="#f85149", width=2),
+            marker=dict(color="#f85149", size=5),
+            fill="tozeroy",
+            fillcolor="rgba(248,81,73,0.10)",
+        ))
 
     fig_reject_rate.update_layout(
         height=360,
-        autosize=False,
+        autosize=True,
         margin=dict(l=30, r=10, t=10, b=30),
         xaxis_title="Time (seconds since dashboard start)",
         yaxis_title="Rejects / second",
+        paper_bgcolor="#161b22",
+        plot_bgcolor="#1a1f29",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="#21262d"),
+        yaxis=dict(gridcolor="#21262d"),
     )
 
     # ---------------------------
@@ -467,9 +647,10 @@ def refresh(_n: int):
             x=stale_edge_x,
             y=stale_edge_y,
             mode="lines",
-            line=dict(color="red", width=1),
+            line=dict(color="#f85149", width=1.5, dash="dot"),
             hoverinfo="none",
             name="stale-link",
+            showlegend=False,
         ))
 
         # main edges on top
@@ -477,9 +658,10 @@ def refresh(_n: int):
             x=main_edge_x,
             y=main_edge_y,
             mode="lines",
-            line=dict(color="green", width=2),
+            line=dict(color="#3fb950", width=3),
             hoverinfo="none",
             name="main-link",
+            showlegend=False,
         ))
 
         node_x = []
@@ -495,7 +677,7 @@ def refresh(_n: int):
             x, y = layout_map[bh]
             node_x.append(x)
             node_y.append(y)
-            node_color.append("green" if b.get("on_main_chain") else "red")
+            node_color.append("#3fb950" if b.get("on_main_chain") else "#f85149")
 
             miner = b.get("miner_id", "?")
             ts = b.get("accepted_timestamp_ms", 0)
@@ -511,19 +693,50 @@ def refresh(_n: int):
             x=node_x,
             y=node_y,
             mode="markers",
-            marker=dict(symbol="circle", size=8, color=node_color),
+            marker=dict(
+                symbol="circle",
+                size=14,
+                color=node_color,
+                line=dict(color="#e6edf3", width=1.5),
+            ),
             text=node_text,
             hoverinfo="text",
             name="block",
+            showlegend=False,
+        ))
+
+        # Legend dummy traces
+        fig_tree.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(symbol="circle", size=10, color="#3fb950"),
+            name="Main Chain",
+        ))
+        fig_tree.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(symbol="circle", size=10, color="#f85149"),
+            name="Stale/Orphan",
         ))
 
     fig_tree.update_layout(
         title="Block DAG (Green=Main, Red=Orphan/Stale)",
-        showlegend=False,
+        showlegend=True,
         xaxis_title="Height",
         yaxis_title="Branch Offset",
         height=420,
         margin=dict(l=30, r=10, t=40, b=30),
+        paper_bgcolor="#161b22",
+        plot_bgcolor="#1a1f29",
+        font=dict(color="#e6edf3"),
+        xaxis=dict(gridcolor="#21262d"),
+        yaxis=dict(gridcolor="#21262d"),
+        legend=dict(
+            bgcolor="#21262d",
+            font=dict(color="#e6edf3"),
+        ),
     )
 
     # ---------------------------
@@ -573,6 +786,7 @@ def refresh(_n: int):
         fig_tree,
         table_data,
         status,
+        badge_live,
     )
 
 
