@@ -31,19 +31,7 @@ DASH_START_S = time.time()
 # UI helpers
 # ---------------------------
 
-def _card_style(alert: bool = False) -> Dict[str, Any]:
-    if alert:
-        return {
-            "flex": "1 1 0",
-            "minWidth": "0",
-            "borderLeft": "4px solid #f85149",
-            "borderTop": "1px solid #30363d",
-            "borderRight": "1px solid #30363d",
-            "borderBottom": "1px solid #30363d",
-            "borderRadius": "10px",
-            "padding": "10px 12px",
-            "backgroundColor": "#1f1115",
-        }
+def _card_style() -> Dict[str, Any]:
     return {
         "flex": "1 1 0",
         "minWidth": "0",
@@ -54,9 +42,9 @@ def _card_style(alert: bool = False) -> Dict[str, Any]:
     }
 
 
-def make_card(title: str, value: str, subtitle: str = "", alert: bool = False) -> html.Div:
+def make_card(title: str, value: str, subtitle: str = "") -> html.Div:
     return html.Div(
-        style=_card_style(alert=alert),
+        style=_card_style(),
         children=[
             html.Div(title, style={"fontSize": "12px", "color": "#8b949e"}),
             html.Div(value, style={"fontSize": "24px", "fontWeight": "bold", "color": "#e6edf3"}),
@@ -422,10 +410,10 @@ def refresh(_n: int):
     card_next_adjustment = make_card("Next difficulty step", str(blocks_to_next_adjustment), "Blocks remaining")
     card_rejected = make_card("Rejected total", str(rejected_total), "Stale work / invalid submissions")
     card_uptime = make_card("Uptime", f"{uptime_ms/1000:.1f}s", f"{uptime_ms} ms")
-    card_forks = make_card("Forks detected", str(forks_detected), "Points with multiple children", alert=forks_detected > 0)
-    card_orphans = make_card("Orphan blocks", str(orphan_count), "Blocks not in main chain", alert=orphan_count > 0)
-    card_reorgs = make_card("Reorgs", str(reorg_count), "Chain reorganizations", alert=reorg_count > 0)
-    card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)", alert=total_ratio > 0.05)
+    card_forks = make_card("Forks detected", str(forks_detected), "Points with multiple children")
+    card_orphans = make_card("Orphan blocks", str(orphan_count), "Blocks not in main chain")
+    card_reorgs = make_card("Reorgs", str(reorg_count), "Chain reorganizations")
+    card_ratio = make_card("Reject ratio", f"{total_ratio:.2f}", "rejected / (rejected + accepted)")
 
     # Time series
     t_rel = time.time() - DASH_START_S
@@ -674,10 +662,12 @@ def refresh(_n: int):
             if bh not in layout_map:
                 continue
 
+            is_main = b.get("on_main_chain")
+
             x, y = layout_map[bh]
             node_x.append(x)
             node_y.append(y)
-            node_color.append("#3fb950" if b.get("on_main_chain") else "#f85149")
+            node_color.append("#3fb950" if is_main else "#f85149")
 
             miner = b.get("miner_id", "?")
             ts = b.get("accepted_timestamp_ms", 0)
@@ -700,6 +690,9 @@ def refresh(_n: int):
                 line=dict(color="#e6edf3", width=1.5),
             ),
             text=node_text,
+            hoverlabel=dict(
+                font=dict(color="#ffffff"),
+            ),
             hoverinfo="text",
             name="block",
             showlegend=False,
